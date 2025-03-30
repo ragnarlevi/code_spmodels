@@ -125,7 +125,7 @@ Q_function <- Vectorize(Q_function, vectorize.args = c("y", "mu"))
 hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, 
                          n_iter = 100, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, ...){
+                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, ...){
   
   
   control_list <- list(...)
@@ -274,6 +274,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     
     # Get full mu by combining covariate effects (nu), spatial effects, and exposure
     mu <- get_mu(nu, se$spatial_effect, exposure, additive)
+    
     mu_batch <- mu[idx]
     nu_batch <- nu[idx]
     
@@ -300,13 +301,13 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     
     
     # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
-    grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, se$spatial_effect)
+    grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, se$spatial_effect[idx], locs_batch)
     
     # Compute psi/a gradient
     if(model_type == "learn_graph"){
-      grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, exposure_batch, nu_batch, lambda)
+      grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_batch, lambda)
     }else if (model_type == "learn_psi"){
-      grad_psi_total <- get_grad_psi(additive,grad_mu, se$agg_effect, nu_batch, exposure_batch)
+      grad_psi_total <- get_grad_psi(additive,grad_mu, se$agg_effect[idx], nu_batch, exposure_batch, locs_batch)
     }
     
     # phi grad
@@ -329,7 +330,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     beta_est <- beta_out$param
     controls$beta <- beta_out$controls
     
-    beta_reduce <- sum((beta_est - beta_old)^2)/sum((beta_old)^2)
+    beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
     
     # update psi/a
     if(model_type == "learn_graph"){
@@ -339,7 +340,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
       a_est <- pmax(a_est, 1e-6)
       
       
-      spatial_reduce <- sum((a_est - a_old)^2)/sum((a_old)^2)
+      spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
       
     }else if(model_type == "learn_psi"){
       psi_out <- update_gradient(optimizer_psi, psi_est, grad_psi_total, controls$psi)
@@ -347,7 +348,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
       controls$psi <- psi_out$controls
       psi_est <- pmax(psi_est, 1e-6)
       
-      spatial_reduce <- sum((psi_est - psi_old)^2)/sum((psi_old)^2)
+      spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
     }
     
     
@@ -363,7 +364,8 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     
     # Stop if parameters have converges
     
-    if(beta_reduce <= param_tol & spatial_reduce <= param_tol   ){
+    if(beta_converged & spatial_converged  ){
+      print("Breaking because parameters have stopped changing")
       break
     }
     
@@ -377,30 +379,43 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     
 
     mu_old <- mu
-    print(sum(mu<=0))
-    
     if(iter >1){
       log_lik_old <- log_lik
-      log_lik <- Q_function(claims,  exp(beta_phi), pi_est,  mu,  z_density)
-      print(sum(log_lik))
+      log_lik <- sum(log(Q_function(claims,  exp(beta_phi), pi_est,  mu,  z_density)))
+      
+      if(iter > 2){
+        if(isTRUE(all.equal(log_lik, log_lik_old, tolerance = Q_tol))){
+          print("Breaking because log-likelihood has stopped changing")
+          break
+        } 
+      }
+      if(log_lik < log_lik_old){
+
+        print("There is a decrease in the likelihood. Some numerical instabilities occuring. Maybe change SGD batch if using SGD")
+      }
     
       }
     
+    if(verbose >= 1){
+      print(paste0("log-likelihood value  ",sum(log_lik)))
+    }
     
-    if(model_type == "learn_graph"){
-      cat(sprintf("Iteration %d: beta = [%s], a = [%s], beta_phi = %f, pi = %f \n,",
-                  iter,
-                  paste(round(beta_est, 4), collapse = ", "),
-                  paste(round(a_est, 4), collapse = ", "),
-                  beta_phi,
-                  pi_est))
-    }else if (model_type == "learn_psi"){
-      cat(sprintf("Iteration %d: beta = [%s], psi = [%s], beta_phi = %f, pi = %f \n,",
-                  iter,
-                  paste(round(beta_est, 4), collapse = ", "),
-                  paste(round(psi_est, 4), collapse = ", "),
-                  beta_phi,
-                  pi_est))
+    if(verbose >=2){
+      if(model_type == "learn_graph"){
+        cat(sprintf("Iteration %d: beta = [%s], a = [%s], beta_phi = %f, pi = %f \n,",
+                    iter,
+                    paste(round(beta_est, 4), collapse = ", "),
+                    paste(round(a_est, 4), collapse = ", "),
+                    beta_phi,
+                    pi_est))
+      }else if (model_type == "learn_psi"){
+        cat(sprintf("Iteration %d: beta = [%s], psi = [%s], beta_phi = %f, pi = %f \n,",
+                    iter,
+                    paste(round(beta_est, 4), collapse = ", "),
+                    paste(round(psi_est, 4), collapse = ", "),
+                    beta_phi,
+                    pi_est))
+      } 
     }
     
   }
@@ -412,7 +427,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
 # 4. Test
 #########################
 source("simulate_data.R")
-data_sim <- simulate_hurdle_claims(100, 20, "graph", TRUE, mixing = "gamma")
+data_sim <- simulate_hurdle_claims(100, 200, "graph", TRUE, mixing = "gamma")
 
 # Extract variables from simulation
 claims <- data_sim$claims
@@ -429,8 +444,8 @@ mixing <- "gamma"
 
 hurdle_mixed (claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, 
                          n_iter = 100, lambda = 0, optimizer_beta = "adam", optimizer_psi = "adam", 
-                         optimizer_a = "adam", optimizer_pi = "adam", optimizer_beta_phi = "adam", sgd = FALSE,
-                         batch_size = 500, param_tol = 1e-5)
+                         optimizer_a = "adam", optimizer_pi = "adam", optimizer_beta_phi = "adam", sgd = TRUE,
+                         batch_size = 100, param_tol = 1e-9, verbose = 1)
 
 #save.image("hurdle_test.R")
 

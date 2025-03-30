@@ -11,7 +11,7 @@ ln_density <- function(z, phi) dlnorm(z, meanlog = -phi^2/2, sdlog = phi)
 # Define general gradients
 #########################
 
-get_grad_beta <- function(additive, grad_mu, nu, exposure_batch, X_batch, spatial_effect){
+get_grad_beta <- function(additive, grad_mu, nu, exposure_batch, X_batch, spatial_effect, locs_batch){
   if(additive){
     return(as.numeric(t(grad_mu * nu * exposure_batch) %*% X_batch))
   }else{
@@ -19,7 +19,7 @@ get_grad_beta <- function(additive, grad_mu, nu, exposure_batch, X_batch, spatia
   }
 }
 
-get_grad_psi <- function(additive, grad_mu, agg_effect, nu, exposure_batch){
+get_grad_psi <- function(additive, grad_mu, agg_effect, nu, exposure_batch, locs_batch){
   if(additive){
     grad_psi <- grad_mu * exposure_batch * agg_effect
   }else{
@@ -29,7 +29,7 @@ get_grad_psi <- function(additive, grad_mu, agg_effect, nu, exposure_batch){
   sapply(1:nr_regions, function(r) sum(grad_psi[locs_batch == r]))
 }
 
-get_grad_a <- function(additive, grad_mu, agg_claims, years, exposure, nu, lambda){
+get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, lambda){
   if(additive){
     g2 <- grad_mu * t(agg_claims[, years]) * exp(log(exposure))
   }else{
