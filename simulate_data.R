@@ -3,7 +3,7 @@
 # 1. Simulate Data
 #########################
 
-simulate_zip_claims <- function(n, years, spatial_type, additive, mixing, area = 5){
+simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, model_type = "poisson"){
   set.seed(123)
   
   # store claim data
@@ -35,6 +35,11 @@ simulate_zip_claims <- function(n, years, spatial_type, additive, mixing, area =
   A1_true <- A1_true + t(A1_true)
   diag(A1_true) <- 0.1
   
+  
+  if(spatial_type== "graph"){
+    A1_true <- 15 * A1_true
+  }
+  
   psi_true <- runif(area, 1, 3)
   
   prop_true <- 0.7
@@ -56,10 +61,10 @@ simulate_zip_claims <- function(n, years, spatial_type, additive, mixing, area =
     } else if(spatial_type == "graph") {
       if(additive){
         mu[, t] <- (exp(X_mat1[((t-1)*n + 1):(t*n),] %*% beta1_true) +
-                      (15 * (A1_true %*% y_latent[, t]))[locs]) *
+                      ( (A1_true %*% y_latent[, t]))[locs]) *
           exposure[((t-1)*n + 1):(t*n)]
       } else {
-        mu[, t] <- (1 + (15 * (A1_true %*% y_latent[, t]))[locs]) *
+        mu[, t] <- (1 + ( (A1_true %*% y_latent[, t]))[locs]) *
           exp(X_mat1[((t-1)*n + 1):(t*n),] %*% beta1_true) *
           exposure[((t-1)*n + 1):(t*n)]
       }
@@ -79,8 +84,27 @@ simulate_zip_claims <- function(n, years, spatial_type, additive, mixing, area =
     }
     
     u <- runif(n)
-    claims[, t+1] <- (u >= prop_true) * rpois(n, mu[, t] * z[, t])
-    
+    if(model_type == "poisson"){
+      claims[, t+1] <- rpois(n, mu[, t] * z[, t])
+    }else if(model_type == "zip"){
+      claims[, t+1] <- (u >= prop_true) * rpois(n, mu[, t] * z[, t])
+    } else if(model_type == "hurdle"){
+      for(i in 1:n){
+        # Decide if observation is a hurdle (y=0) or positive outcome (y>0)
+        if (runif(1) <= prop_true) {
+          claims[i,t+1] <- 0
+        } else {
+          lambda_val <- mu[i,t]* z[i,t]
+          # Rejection sampling for truncated Poisson (ensure y > 0)
+          repeat {
+            y_sample <- rpois(1, lambda = lambda_val)
+            if (y_sample > 0) break
+          }
+          claims[i,t+1] <- y_sample
+        }
+      }
+    }
+
     locs_vec <- c(locs_vec, locs)
   }
   

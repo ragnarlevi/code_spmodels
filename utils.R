@@ -1,9 +1,9 @@
 ### This files contains utillity functions that are needed across all models
 
 ############## Mixing Densities ##############
-gamma_density <- function(z) dgamma(z, shape = phi, rate = phi)
-ig_density <- function(z) actuar::dinvgauss(z, mean = 1, shape = phi^2)
-ln_density <- function(z) dlnorm(z, meanlog = -phi^2/2, sdlog = phi)
+gamma_density <- function(z, phi) dgamma(z, shape = phi, rate = phi)
+ig_density <- function(z, phi) actuar::dinvgauss(z, mean = 1, shape = phi^2)
+ln_density <- function(z, phi) dlnorm(z, meanlog = -phi^2/2, sdlog = phi)
 
 
 
@@ -11,25 +11,25 @@ ln_density <- function(z) dlnorm(z, meanlog = -phi^2/2, sdlog = phi)
 # Define general gradients
 #########################
 
-get_grad_beta <- function(additive){
+get_grad_beta <- function(additive, grad_mu, nu, exposure_batch, X_batch, spatial_effect){
   if(additive){
     return(as.numeric(t(grad_mu * nu * exposure_batch) %*% X_batch))
   }else{
-    return(as.numeric(t(grad_mu * nu * exposure_batch * (1+se$spatial_effect)) %*% X_batch))
+    return(as.numeric(t(grad_mu * nu * exposure_batch * (1+spatial_effect)) %*% X_batch))
   }
 }
 
-get_grad_psi <- function(additive){
+get_grad_psi <- function(additive, grad_mu, agg_effect, nu, exposure_batch){
   if(additive){
-    grad_psi <- grad_mu * exposure_batch * se$agg_effect
+    grad_psi <- grad_mu * exposure_batch * agg_effect
   }else{
-    grad_psi <- grad_mu * exposure_batch * se$agg_effect *  nu
+    grad_psi <- grad_mu * exposure_batch * agg_effect *  nu
   }
   
   sapply(1:nr_regions, function(r) sum(grad_psi[locs_batch == r]))
 }
 
-get_grad_a <- function(additive){
+get_grad_a <- function(additive, grad_mu, agg_claims, years, exposure, nu, lambda){
   if(additive){
     g2 <- grad_mu * t(agg_claims[, years]) * exp(log(exposure))
   }else{
@@ -52,7 +52,7 @@ get_grad_pi <- function(){
 }
 
 
-get_grad_beta_phi <- function(){
+get_grad_beta_phi <- function(phi, w1 = NA, w2 = NA, w3 = NA, w4 = NA){
   if(mixing == "gamma"){
     grad <- sum( phi * ( log(phi) + 1 - digamma(phi) + w2 - w1 ) )
   }else if(mixing == "ig"){
@@ -137,216 +137,14 @@ update_gradient <- function(optimizer, param, grad, controls){
 
 
 
-############## Poisson Gamma #############
-
-# E-step for Poisson-Gamma
-Etheta <- function(claims,lambda,phi) (phi + claims)/(phi + lambda)
-Elogtheta <- function(claims,lambda,phi) digamma(phi + claims) - log(phi + lambda)
-
-
-Q_PG_beta_2 <- function(param,  claims, exposure, X2,  etheta, eother){
-  
-  etheta = as.numeric(etheta)
-  elogtheta = as.numeric(eother)
-  
-  nu2 <- exp(X2 %*% as.matrix(param))
-  phi <- nu2 
-  
-  
-  ll = sum(phi*log(phi) -lgamma(phi) + (phi-1)*elogtheta - phi*etheta )
-  return(-ll)
-  
-}
-
-
-
-Q_PG_beta_2_deriv <- function(param,  claims, exposure, X2,  etheta, eother){
-  
-  etheta = as.numeric(etheta)
-  elogtheta = as.numeric(eother)
-  
-  nu2 <- exp(X2 %*% as.matrix(param))
-  phi <- nu2 
-  
-  der1_logdga <- log(phi) + 1 - digamma(phi) + elogtheta - etheta
-  
-  
-  g3 <- t( der1_logdga*nu2 ) %*% X2
-  
-  return(-g3)
-}
-
-
-
-################ Poisson IG ############
-
-
-# E-step for PIG
-Etheta_gig <- function(claims, a, b){
-  
-  
-  num <- (sqrt(b)/sqrt(a)) * besselK(sqrt(a*b), claims+1-0.5,expon.scaled = TRUE)
-  denom <- besselK(sqrt(a*b), claims-0.5,expon.scaled = TRUE)
-  
-  return(num/denom)
-}
-# E-step for PIG
-Einvtheta_gig <- function(claims, a, b){
-  num <- (sqrt(a)/sqrt(b)) * besselK(sqrt(a*b), claims+1-0.5,expon.scaled = TRUE)
-  denom <- besselK(sqrt(a*b), claims-0.5,expon.scaled = TRUE)
-  
-  
-  return(num/denom- 2*(claims-0.5)/b)
-  
-}
-
-
-Q_PIG_beta_2 <- function(param, claims, exposure, X2, etheta, eother){
-  
-  etheta = as.numeric(etheta)
-  einvtheta = as.numeric(eother)
-  
-  nu2 <- exp(X2 %*% as.matrix(param))
-  phi <- nu2 
-  
-  
-  ll = sum(log(phi) + phi^2 - 0.5*phi^2*(einvtheta + etheta))
-  
-  return(-ll)
-  
-}
-
-Q_PIG_beta_2_deriv <- function(param, claims, exposure, X2, etheta, eother){
-  
-  etheta = as.numeric(etheta)
-  einvtheta = as.numeric(eother)
-  
-  nu2 <- exp(X2 %*% as.matrix(param))
-  phi <- nu2 
-  
-  der1_logdgauss <- 1/phi + 2*phi - phi*einvtheta - phi*etheta
-  g3 <- t(der1_logdgauss* nu2)%*% X2
-  
-  return(-g3)
-}
-
-
-
-
-
-
-
-############# Poisson LN ##########
-
-
-# functions to perform integrations for pln
-dlno<-function(z,phi) {
-  (1/(sqrt(2*pi)*phi*z) ) *exp(  -((log(z)+((phi^2)/2))^2)  /(2*(phi^2)) )
-}
-
-
-jpdf<-function(y,mu,phi){
-  fun=function(z) {
-    dpois(y, mu*z)*dlno(z,phi)
-  }
-  
-  out <- tryCatch({
-    lower <- qlnorm(0.0001,meanlog = -phi^2/2, sdlog = phi)
-    upper <- qlnorm(0.9999,meanlog = -phi^2/2, sdlog = phi)
-    integrate(fun, lower, upper)$value
-  }, error = function(e) NA)
-  return(out)
-}
-
-jpdf <- Vectorize(jpdf, vectorize.args = c("y", "mu", "phi"))
-
-pm2<-function(y,mu,phi, numer){
-  fun=function(z) {
-    (log(z)^2)* dpois(y, mu*z)* dlno(z,phi)
-  }
-  
-  
-  out <- tryCatch({
-    lower <- qlnorm(0.0001,meanlog = -phi^2/2, sdlog = phi)
-    upper <- qlnorm(0.9999,meanlog = -phi^2/2, sdlog = phi)
-    integrate(fun, lower, upper)$value
-  }, error = function(e) NA)
-  
-  return(out/numer)
-}
-
-pm2 <- Vectorize(pm2, vectorize.args = c("y", "mu", "phi","numer"))
-
-pm1<-function(y,mu,phi, numer ){
-  fun=function(z) {
-    z * dpois(y, mu*z)* dlno(z,phi)
-  }
-  out <- tryCatch({
-    lower <- qlnorm(0.0001,meanlog = -phi^2/2, sdlog = phi)
-    upper <- qlnorm(0.9999,meanlog = -phi^2/2, sdlog = phi)
-    integrate(fun, lower, upper)$value
-  }, error = function(e) NA)
-  
-  return(out/numer)
-}
-pm1 <- Vectorize(pm1, vectorize.args = c("y", "mu", "phi","numer"))
-
-
-
-
-log_dpln <- function(y,mu,phi){
-  fun=function(z) {
-    dpois(y, mu*z)* dlno(z,phi)
-  }
-  out <- tryCatch({
-    lower <- qlnorm(0.0001,meanlog = -phi^2/2, sdlog = phi)
-    upper <- qlnorm(0.9999,meanlog = -phi^2/2, sdlog = phi)
-    integrate(fun, lower, upper)$value
-  }, error = function(e) NA)
-  if(!is.na(out)){
-    if(out <= 1e-8){
-      out <- 1e-8
-    } 
-  }
-  return(log(out))
-  
-}
-log_dpln <- Vectorize(log_dpln, vectorize.args = c("y", "mu", "phi"))
-
-
-
-Q_PLN_beta_2 <- function(param, claims, exposure, X2, etheta = 1, eother){
-  
-  elogthetasq = as.numeric(eother)
-  
-  nu2 <- exp(X2 %*% as.matrix(param))
-  phi <- nu2
-  
-  
-  ll = sum(-log(phi) - elogthetasq/(2*phi^2)  - phi^2/8)
-  return(-ll)
-  
-}
-
-Q_PLN_beta_2_deriv <- function(param, claims, exposure, X2, etheta = 1, eother){
-  
-  elogthetasq = as.numeric(eother)
-  
-  nu2 <- exp(X2 %*% as.matrix(param))
-  phi <- nu2
-  
-  der1_logdig <- -1/phi + elogthetasq/(phi ^3) - 2*phi/8
-  
-  
-  g3 <- t( der1_logdig*nu2 ) %*% X2
-  
-  return(-g3)
-}
-
-
 
 ########### Other Function ##############
-# Spatial aggregate function - used forloading models
+
+# get default value if a is
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+
+# Spatial aggregate function - used for loading models
 # Assumes that the first column of agg_claims is claims at time t=0
 # The function aggregats spatial effects for each locations.
 # It returns a data frame, 

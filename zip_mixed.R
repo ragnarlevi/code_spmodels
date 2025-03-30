@@ -10,63 +10,108 @@ source("simulate_data.R")
 
 
 
-expected_h <- function(y, beta, phi, pi, mu, z_density) {
-
-  if (y == 0) {
-    integrand_num <- function(z) {
-      den <- pi * exp(z * mu) + (1 - pi)
-      h_val <- ifelse(is.finite(den), -((1 - pi) * z) / den, 0)
-      lik <- pi + (1 - pi) * exp(-z * mu)
-      val <- h_val * lik * z_density(z)
-      val[!is.finite(val)] <- 0
-      return(val)
-    }
-    integrand_denom <- function(z) {
-      lik <- pi + (1 - pi) * exp(-z * mu)
-      val <- lik * z_density(z)
-      val[!is.finite(val)] <- 0
-      return(val)
-    }
-  } else {
-    integrand_num <- function(z) {
-      h_val <- (y / mu) - z
-      lik <- (1 - pi) * ((z * mu)^y * exp(-z * mu)) / gamma(y + 1)
-      val <- h_val * lik * z_density(z)
-      val[!is.finite(val)] <- 0
-      return(val)
-    }
-    integrand_denom <- function(z) {
-      lik <- (1 - pi) * ((z * mu)^y * exp(-z * mu)) / gamma(y + 1)
-      val <- lik * z_density(z)
-      val[!is.finite(val)] <- 0
-      return(val)
-    }
-  }
+expected_h <- function(y, beta, phi, pi, mu, z_density, do_integral = TRUE) {
   
-  num <- integrate(integrand_num, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
-  denom <- integrate(integrand_denom, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
-  if (denom == 0) return(0)
-  return(num / denom)
-}
-expected_h <- Vectorize(expected_h, vectorize.args = c("y", "mu"))
-
-expected_pi_grad <- function(y, beta, phi, pi, mu, z_density) {
-
+  # THE DO_INTEGRAL IS JUST TO TEST DERIVATIVES
   
-  if (y == 0) {
-    integrand_num <- function(z) {
-      (1 - exp(-z * mu)) * z_density(z)
+  if(do_integral){
+    if (y == 0) {
+      integrand_num <- function(z) {
+        den <- pi * exp(z * mu) + (1 - pi)
+        h_val <- ifelse(is.finite(den), -((1 - pi) * z) / den, 0)
+        lik <- pi + (1 - pi) * exp(-z * mu)
+        val <- h_val * lik * z_density(z, phi)
+        val[!is.finite(val)] <- 0
+        return(val)
+      }
+      integrand_denom <- function(z) {
+        lik <- pi + (1 - pi) * exp(-z * mu)
+        val <- lik * z_density(z, phi)
+        val[!is.finite(val)] <- 0
+        return(val)
+      }
+    } else {
+      integrand_num <- function(z) {
+        h_val <- (y / mu) - z
+        lik <- (1 - pi) * ((z * mu)^y * exp(-z * mu)) / gamma(y + 1)
+        val <- h_val * lik * z_density(z, phi)
+        val[!is.finite(val)] <- 0
+        return(val)
+      }
+      integrand_denom <- function(z) {
+        lik <- (1 - pi) * ((z * mu)^y * exp(-z * mu)) / gamma(y + 1)
+        val <- lik * z_density(z, phi)
+        val[!is.finite(val)] <- 0
+        return(val)
+      }
     }
-    integrand_denom <- function(z) {
-      (pi + (1 - pi) * exp(-z * mu)) * z_density(z)
-    }
+    
     num <- integrate(integrand_num, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
     denom <- integrate(integrand_denom, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
     if (denom == 0) return(0)
     return(num / denom)
-  } else {
-    return(-1 / (1 - pi))
+  }else{
+    if (y == 0) {
+
+        den <- pi * exp(1 * mu) + (1 - pi)
+        h_val <- ifelse(is.finite(den), -((1 - pi) * 1) / den, 0)
+        val <- h_val
+        val[!is.finite(val)] <- 0
+        return(val)
+    } else {
+        h_val <- (y / mu) - 1
+        val <- h_val 
+        val[!is.finite(val)] <- 0
+        return(val)
+      
+
+    }
+    
   }
+
+
+}
+expected_h <- Vectorize(expected_h, vectorize.args = c("y", "mu"))
+
+expected_pi_grad <- function(y, beta, phi, pi, mu, z_density, do_integral = TRUE) {
+
+  # THE DO_INTEGRAL IS JUST TO TEST DERIVATIVES
+  if(do_integral){
+    if (y == 0) {
+      integrand_num <- function(z) {
+        num <- (1 - exp(-z * mu))
+        denom <- pi + (1 - pi) * exp(-z * mu)
+        val <- (num / denom) * (pi + (1 - pi) * exp(-z * mu)) * z_density(z, phi)
+        val[!is.finite(val)] <- 0
+        return(val)
+      }
+      integrand_denom <- function(z) {
+        lik <- pi + (1 - pi) * exp(-z * mu)
+        val <- lik * z_density(z, phi)
+        val[!is.finite(val)] <- 0
+        return(val)
+      }
+      num <- integrate(integrand_num, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
+      denom <- integrate(integrand_denom, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
+      if (denom == 0) return(0)
+      return(num / denom)
+    } else {
+      return(-1 / (1 - pi))
+    } 
+  }else{
+    if (y == 0) {
+        num <- (1 - exp(-1 * mu))
+        denom <- pi + (1 - pi) * exp(-1 * mu)
+        val <- (num / denom) 
+        val[!is.finite(val)] <- 0
+      return(val)
+    } else {
+      return(-1 / (1 - pi))
+    } 
+    
+  }
+
+
 }
 expected_pi_grad <- Vectorize(expected_pi_grad, vectorize.args = c("y", "mu"))
 
@@ -77,20 +122,20 @@ expected_w <- function(y, phi, pi, mu, z_density, w_fun) {
   if (y == 0) {
     integrand_num <- function(z) {
       f_y_given_z <- pi + (1 - pi) * exp(-z * mu)
-      f_y_given_z * w_fun(z) * z_density(z)
+      f_y_given_z * w_fun(z) * z_density(z, phi)
     }
     integrand_denom <- function(z) {
       f_y_given_z <- pi + (1 - pi) * exp(-z * mu)
-      f_y_given_z * z_density(z)
+      f_y_given_z * z_density(z, phi)
     }
   } else {
     integrand_num <- function(z) {
       f_y_given_z <- (1 - pi) * ((z * mu)^y * exp(-z * mu)) / factorial(y)
-      f_y_given_z * w_fun(z) * z_density(z)
+      f_y_given_z * w_fun(z) * z_density(z, phi)
     }
     integrand_denom <- function(z) {
       f_y_given_z <- (1 - pi) * ((z * mu)^y * exp(-z * mu)) / factorial(y)
-      f_y_given_z * z_density(z)
+      f_y_given_z * z_density(z, phi)
     }
   }
   
@@ -233,7 +278,7 @@ update_gradient <- function(optimizer, param, grad, controls){
 #########################
 # 4. Test
 #########################
-data_sim <- simulate_zip_claims(100, 200, "psi", TRUE, mixing = "ig")
+data_sim <- simulate_claims(100, 20, "psi", TRUE, mixing = "none", model_type = "zip")
 
 # Extract variables from simulation
 claims <- data_sim$claims
@@ -282,28 +327,28 @@ out_zip <- zip(data_sim$claims, data_sim$X, data_sim$locs, data_sim$years,  data
                data_sim$A, additive, "learn_psi", lambda = 0, exposure = data_sim$exposure, max_itr = 300)
 
 
-beta_est <- out_zip$beta1    # beta (d-dimensional)
-pi_est <- out_zip$prop           # pi (scalar)
-psi_est <- out_zip$psi     # psi (vector of length nr_regions)
-a_est <- out_zip$a
+beta_est <- c(0,0,0) #out_zip$beta1    # beta (d-dimensional)
+pi_est <- 0.5#out_zip$prop           # pi (scalar)
+psi_est <- rep(0, nr_regions)# out_zip$psi     # psi (vector of length nr_regions)
+a_est <- rep(0, nr_regions*(nr_regions + 1)/2)# out_zip$a
 
 # Initialize controls
-optimizer_beta <- "adam"
-optimizer_psi <- "adam"
-optimizer_a <- "adam"
-optimizer_pi <- "adam"
-optimizer_beta_phi <- "adam"
-sgd <- TRUE
+optimizer_beta <- "gd"
+optimizer_psi <- "gd"
+optimizer_a <- "gd"
+optimizer_pi <- "gd"
+optimizer_beta_phi <- "gd"
+sgd <- FALSE
 batch_size <- 100
 
 
 
 controls <- list()
-controls$beta <- get_controls(optimizer_beta, 0.01, d, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-controls$psi <- get_controls(optimizer_psi, 0.01, nr_regions, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-controls$pi <- get_controls(optimizer_pi, 0.001, 1, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-controls$beta_phi <- get_controls(optimizer_beta_phi, 0.01, 1, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-controls$a <- get_controls(optimizer_a, 0.01, nr_edges, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
+controls$beta <- get_controls(optimizer_beta, 0.001, d, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
+controls$psi <- get_controls(optimizer_psi, 0.1, nr_regions, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
+controls$pi <- get_controls(optimizer_pi, 0.0001, 1, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
+controls$beta_phi <- get_controls(optimizer_beta_phi, 0.001, 1, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
+controls$a <- get_controls(optimizer_a, 0.001, nr_edges, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
 
 
 
@@ -356,8 +401,9 @@ for (iter in 1:n_iter) {
   
   # E-steps
   # Compute expected derivative with respect to mu
-  grad_mu <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density)
-  grad_pi <- expected_pi_grad(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density)
+  grad_mu <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, TRUE)
+  grad_pi <- expected_pi_grad(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, TRUE)
+
   
   if(mixing == "gamma"){
     w1 <- expected_w(y = claims_batch, phi = phi, pi = pi_est, mu = mu, z_density = z_density, w_fun = identity)
@@ -368,7 +414,9 @@ for (iter in 1:n_iter) {
   } else if(mixing == "ln"){
     w4 <- expected_w(y = claims_batch, phi = phi, pi = pi_est, mu = mu, z_density = z_density, w_fun = function(x) log(x)^2)
   }
+  
 
+  
   
   # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
   grad_beta_total <- get_grad_beta(additive)
