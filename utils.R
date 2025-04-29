@@ -15,40 +15,54 @@ rln_density <- function(n, phi) rlnorm(n, meanlog = -phi^2/2, sdlog = phi)
 # Functions for E-step
 ###################
 # 1. Numerical Integration Version --------------------------------------------
-expected_h_integration <- function(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun) {
+expected_h_integration <- function(y, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, 
+                                   phi_old = phi, pi_old = pi, mu_old = mu) {
   
   if(special_case){
     return(special_fun(z, y, pi, mu))
   }
   
+  # print(length(y))
+  # print(length(pi))
+  # print(length(pi_old))
+  # print(length(mu))
+  # print(length(mu_old))
+  # print(length(phi))
+  # print(length(phi_old))
+  
   integrand_num <- function(z) {
     h_val <- h_func(z, y, pi, mu)
-    lik   <- likelihood_func(z, y, pi, mu)
-    val   <- h_val * lik * z_density(z, phi)
+    lik   <- likelihood_func(z, y, pi_old, mu_old)
+    val   <- h_val * lik * z_density(z, phi_old)
     val[!is.finite(val)] <- 0
     return(val)
   }
   integrand_denom <- function(z) {
-    lik <- likelihood_func(z, y, pi, mu)
-    val <- lik * z_density(z, phi)
+    lik <- likelihood_func(z, y, pi_old, mu_old)
+    val <- lik * z_density(z, phi_old)
     val[!is.finite(val)] <- 0
     return(val)
   }
   
-  num   <- integrate(integrand_num, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
-  denom <- integrate(integrand_denom, lower = 0, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
+  num   <- integrate(integrand_num, lower = 1e-3, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
+  denom <- integrate(integrand_denom, lower = 1e-3, upper = Inf, subdivisions = 1000, rel.tol = 1e-8)$value
   if (denom == 0) return(0)
   return(num / denom)
 }
 
 # 2. Monte Carlo EM (MCEM) Version --------------------------------------------
-expected_h_MCEM <- function(y, beta, phi, pi, mu, h_func, likelihood_func, rzdensity, special_case, special_fun, S = 1000) {
-  # Draw S samples from the lognormal prior:
-  z_samples <- rzdensity(S, phi)
+expected_h_MCEM <- function(y,  phi, pi, mu, h_func, likelihood_func, rzdensity, special_case, special_fun, S = 1000,
+                            phi_old = phi, pi_old = pi, mu_old = mu) {
+  
+  if(special_case){
+    return(special_fun(z, y, pi, mu))
+  }
+  # Draw S samples from the z prior:
+  z_samples <- rzdensity(S, phi_old)
   
   # Compute h(z) and likelihood for each sample
   h_vals   <- sapply(z_samples, function(z) h_func(z, y, pi, mu))
-  lik_vals <- sapply(z_samples, function(z) likelihood_func(z, y, pi, mu))
+  lik_vals <- sapply(z_samples, function(z) likelihood_func(z, y, pi_old, mu_old))
   
   num   <- sum(h_vals * lik_vals)
   denom <- sum(lik_vals)
@@ -57,7 +71,14 @@ expected_h_MCEM <- function(y, beta, phi, pi, mu, h_func, likelihood_func, rzden
 }
 
 # 3. Gauss–Legendre Quadrature Version -----------------------------------------
-expected_h_legendre <- function(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes = 50) {
+expected_h_legendre <- function(y, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes = 50,
+                                 phi_old = phi, pi_old = pi, mu_old = mu) {
+  
+  
+  if(special_case){
+    return(special_fun(z, y, pi, mu))
+  }
+  
   if (!requireNamespace("statmod", quietly = TRUE)) {
     stop("Package 'statmod' is required for Gauss-Legendre quadrature. Please install it.")
   }
@@ -77,13 +98,13 @@ expected_h_legendre <- function(y, beta, phi, pi, mu, z_density, h_func, likelih
   for (i in seq_along(z_vals)) {
     z <- z_vals[i]
     h_val <- h_func(z, y, pi, mu)
-    lik   <- likelihood_func(z, y, pi, mu)
-    integrand_num_vals[i]   <- h_val * lik * z_density(z, phi) * jacobian[i]
-    integrand_denom_vals[i] <- lik * z_density(z, phi) * jacobian[i]
+    lik   <- likelihood_func(z, y, pi_old, mu_old)
+    integrand_num_vals[i]   <- h_val * lik * z_density(z, phi_old) * jacobian[i]
+    integrand_denom_vals[i] <- lik * z_density(z, phi_old) * jacobian[i]
   }
   
-  num_quad   <- sum(t_weights * integrand_num_vals)
-  denom_quad <- sum(t_weights * integrand_denom_vals)
+  num_quad   <- sum(t_weights * integrand_num_vals, na.rm = T)
+  denom_quad <- sum(t_weights * integrand_denom_vals, na.rm = T)
   
   if (denom_quad == 0) return(0)
   return(num_quad / denom_quad)
@@ -91,7 +112,13 @@ expected_h_legendre <- function(y, beta, phi, pi, mu, z_density, h_func, likelih
 
 
 # --- 4. Gauss–Hermite Quadrature Version ---
-expected_h_hermite <- function(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes = 50) {
+expected_h_hermite <- function(y,  phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes = 50,
+                               phi_old = phi, pi_old = pi, mu_old = mu) {
+  
+  if(special_case){
+    return(special_fun(z, y, pi, mu))
+  }
+  
   if (!requireNamespace("statmod", quietly = TRUE)) {
     stop("Package 'statmod' is required for Gauss-Hermite quadrature. Please install it.")
   }
@@ -113,42 +140,87 @@ expected_h_hermite <- function(y, beta, phi, pi, mu, z_density, h_func, likeliho
   f_num_vals <- sapply(nodes, function(x) {
     z <- exp(x)
     h_val <- h_func(z, y, pi, mu)
-    lik <- likelihood_func(z, y, pi, mu)
-    prior <- z_density(z, phi)
+    lik <- likelihood_func(z, y, pi_old, mu_old)
+    prior <- z_density(z, phi_old)
     return(h_val * lik * prior * exp(x) * exp(x^2))
   })
   
   f_denom_vals <- sapply(nodes, function(x) {
     z <- exp(x)
-    lik <- likelihood_func(z, y, pi, mu)
-    prior <- z_density(z, phi)
+    lik <- likelihood_func(z, y, pi_old, mu_old)
+    prior <- z_density(z, phi_old)
     return(lik * prior * exp(x) * exp(x^2))
   })
   
   num_quad <- sum(weights * f_num_vals)
   denom_quad <- sum(weights * f_denom_vals)
   
-  if (denom_quad == 0) return(0)
+  if (denom_quad == 0) {
+    
+    return(0)
+    }
+  
   return(num_quad / denom_quad)
 }
 
 # Wrapper Function ---------------------------------------------------------
-expected_h <- function(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, rzdensity, special_case = FALSE, special_fun = NA,  method = c("integration", "MCEM", "GaussLegendre", "GaussHermite"),
-                       S = 1000, n_nodes = 50) {
+expected_h <- function(y, phi, pi, mu, z_density, h_func, likelihood_func, rzdensity, special_case = FALSE, special_fun = NA,  
+                       method = c("integration", "MCEM", "GaussLegendre", "GaussHermite"),
+                       S = 1000, n_nodes = 50, phi_old = phi, pi_old = pi, mu_old = mu) {
+  
   method <- match.arg(method)
+  
+  
   if (method == "integration") {
-    return(expected_h_integration(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun))
+    
+    # return(expected_h_integration(y, phi, pi, mu,
+    #                               z_density, h_func, likelihood_func,
+    #                               special_case, special_fun,
+    #                               phi_old = phi_old,
+    #                               pi_old  = pi_old,
+    #                               mu_old  = mu_old))
+    
+    return( tryCatch(
+      {
+        expected_h_integration(y, phi, pi, mu,
+                               z_density, h_func, likelihood_func,
+                               special_case, special_fun,
+                               phi_old = phi_old,
+                               pi_old  = pi_old,
+                               mu_old  = mu_old)
+      },
+      error = function(e) {
+        print(y)
+        print(mu)
+        print(pi)
+        print(phi)
+
+        warning("`integrate()` failed: ", paste0(y, " ", mu, " ", pi, " ", phi),
+                "\n  falling back to Gauss–Legendre quadrature.")
+
+        expected_h_legendre(y, phi, pi, mu,
+                            z_density, h_func, likelihood_func,
+                            special_case, special_fun,
+                            n_nodes = n_nodes,
+                            phi_old = phi_old,
+                            pi_old  = pi_old,
+                            mu_old  = mu_old)
+      }
+    ) )
   } else if (method == "MCEM") {
-    return(expected_h_MCEM(y, beta, phi, pi, mu, h_func,  likelihood_func, rzdensity, special_case, special_fun, S))
+    return(expected_h_MCEM(y,  phi, pi, mu, h_func,  likelihood_func, rzdensity, special_case, special_fun, S,
+                            phi_old = phi_old, pi_old = pi_old, mu_old = mu_old))
   } else if (method == "GaussLegendre") {
-    return(expected_h_legendre(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes))
+    return(expected_h_legendre(y,  phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes,
+                               phi_old = phi_old, pi_old = pi_old, mu_old = mu_old))
   }else if (method == "GaussHermite") {
-    return(expected_h_hermite(y, beta, phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes))
+    return(expected_h_hermite(y,  phi, pi, mu, z_density, h_func, likelihood_func, special_case, special_fun, n_nodes,
+                              phi_old = phi_old, pi_old = pi_old, mu_old = mu_old))
   }
 }
 
 # Optionally, vectorize the wrapper over y and mu if needed:
-expected_h <- Vectorize(expected_h, vectorize.args = c("y", "mu", "special_case"))
+expected_h <- Vectorize(expected_h, vectorize.args = c("y", "mu", "special_case", "mu_old"))
 
 
 
@@ -178,7 +250,8 @@ get_grad_psi <- function(additive, grad_mu, agg_effect, nu, exposure_batch, locs
   sapply(1:nr_regions, function(r) sum(grad_psi[locs_batch == r]))
 }
 
-get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, lambda){
+get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, lambda, nr_regions){
+  
   if(additive){
     g2 <- grad_mu * t(agg_claims[, years]) * exp(log(exposure))
   }else{
@@ -186,7 +259,7 @@ get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, 
   }
   
   g2 <- by(g2,locs, FUN=colSums)
-  G2 <- matrix(unlist(g2),nrow = nrow(A), ncol = ncol(A), byrow = T)
+  G2 <- matrix(unlist(g2),nrow = nr_regions, ncol = nr_regions, byrow = T)
   g22 <- G2[upper.tri(G2, diag = T)]
   diag(G2) = 0  # make sure we do not double count the diagonal when we add
   g22 <- g22 + t(G2)[upper.tri(G2, diag = T)] - lambda
@@ -201,7 +274,7 @@ get_grad_pi <- function(grad_pi){
 }
 
 
-get_grad_beta_phi <- function(phi, w1 = NA, w2 = NA, w3 = NA, w4 = NA){
+get_grad_beta_phi <- function(phi, mixing, w1 = NA, w2 = NA, w3 = NA, w4 = NA){
   if(mixing == "gamma"){
     grad <- sum( phi * ( log(phi) + 1 - digamma(phi) + w2 - w1 ) )
   }else if(mixing == "ig"){
@@ -211,6 +284,9 @@ get_grad_beta_phi <- function(phi, w1 = NA, w2 = NA, w3 = NA, w4 = NA){
   }
   return(grad)
 }
+
+
+
 
 #########################
 # Define gradient update functions

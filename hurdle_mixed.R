@@ -9,7 +9,7 @@ source("simulate_data.R")
 #########################
 
 
-h_mu_func <- function(z, y, pi, mu) {
+h_hurdle_mu_func <- function(z, y, pi, mu, lambda) {
   if (y == 0) {
     return(0)
   } else {
@@ -28,6 +28,15 @@ hurdle_likelihood_func <- function(z, y, pi, mu) {
 
 
 
+log_hurdle_likelihood_func <- function(z, y, pi, mu) {
+  if (y == 0) {
+    return(log(pi) )
+  } else {
+    return(log(1 - pi) +  dpois(y, lambda = z * mu, log = TRUE) -  log(1 - exp(-z * mu)))
+  }
+}
+
+
 
 
 zhurdle_log_lik_function <- function(y,  phi, pi, mu, z_density) {
@@ -43,21 +52,44 @@ zhurdle_log_lik_function <- function(y,  phi, pi, mu, z_density) {
     (1 - pi) * dpois(y, lambda = z * mu) / (1 - exp(-z * mu))
   }
   
+  # safe integration: try integrate(), otherwise fallback to Legendre
+  lik <- tryCatch({
+    # numerator: ∫ f(y|z) f(z) dz
+    integrate(
+      function(z) f_y_given_z(z) * z_density(z, phi),
+      lower      = 1e-3,
+      upper      = Inf,
+      subdivisions = 1000,
+      rel.tol    = 1e-8
+    )$value
+  }, error = function(e) {
+    
+    # — fallback Gauss–Legendre —
+    quad     <- statmod::gauss.quad(50, kind = "legendre")
+    t_nodes  <- (quad$nodes + 1) / 2
+    t_weights<- quad$weights / 2
+    
+    # transform [0,1] → [0,∞): z = t/(1−t), dz = 1/(1−t)^2 dt
+    z_vals   <- t_nodes / (1 - t_nodes)
+    jacobian <- 1 / (1 - t_nodes)^2
+    
+    num_quad <- sum(
+      t_weights *
+        ( sapply(z_vals, function(z) f_y_given_z(z) * z_density(z, phi)) * jacobian ),
+      na.rm = TRUE
+    )
+    
+    num_quad
+  })
   
-  # Numerator: integrate h(z)*f(y|z)*f(z) over z
-  numerator_integrand <- function(z) {
-    f_y_given_z(z) * z_density(z, phi)
-  }
-  
- 
-  
-  num_result <- integrate(numerator_integrand, lower = 1e-3, subdivisions = 1000,  upper = Inf, rel.tol = 1e-8)
-  
-
-  lik <- num_result$value 
   return(lik)
 }
 zhurdle_log_lik_function <- Vectorize(zhurdle_log_lik_function, vectorize.args = c("y", "mu"))
+
+
+
+
+
 
 
 
@@ -69,10 +101,110 @@ zhurdle_log_lik_function <- Vectorize(zhurdle_log_lik_function, vectorize.args =
 hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, Emethod = "integration",
                          n_iter = 100, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, ...){
+                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0,  control_list = list(), do_optim = TRUE){
   
   
-  control_list <- list(...)
+  
+  # Start by defining two functions that go into the optim base package to
+  # 1. Perform L-BFGS-B method
+  # 2. Obtain Hessian for standard error calculations
+  
+  beta_optim <- function(param){
+    
+    beta_phi_new <- param[1]
+    phi_new <- exp(beta_phi_new)
+    
+    
+    if(model_type == "ordinary"){
+      beta_new <- param[2:(ncol(X)+1)]
+    }else if(model_type == "learn_psi"){
+      beta_new <- param[2:(ncol(X) +1)]
+      psi_new <- param[(ncol(X)+2):length(param)]
+      a_new <- 1
+    }else if(model_type == "learn_graph"){
+      beta_new <- param[2:(ncol(X) +1)]
+      a_new <- param[(ncol(X)+2):length(param)]
+      A <- get_W_from_array(a_new, nr_regions)
+      psi_new <- NA
+    }
+    
+    
+    # Compute spatial aggregate effects and baseline nu
+    se_new <- get_spatial_aggregate(locs_batch, A, psi_est, agg_claims, years_batch, model_type)
+    nu_new <- as.numeric(exp(X_batch %*% beta_new))  # baseline mu from covariates
+    
+    # Get full mu by combining covariate effects (nu), spatial effects, and exposure
+    mu_new <- get_mu(nu_new, se_new$spatial_effect, exposure_batch, additive)
+    
+    
+    
+    lik <- expected_h(y = claims_batch, phi = phi_new, pi = pi_est, mu = mu_new, z_density = z_density,
+                      h_func = log_hurdle_likelihood_func, likelihood_func = hurdle_likelihood_func,
+                      method  = "integration", S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity,
+                      mu_old = mu_batch, phi_old = exp(beta_phi_old))
+    
+    
+    return(-sum(lik))
+    
+  }
+  
+  beta_optim_grad <- function(param){
+    
+    beta_phi_new <- param[1]
+    phi_new <- exp(beta_phi_new)
+    
+    
+    if(model_type == "ordinary"){
+      beta_new <- param[2:(ncol(X)+1)]
+    }else if(model_type == "learn_psi"){
+      beta_new <- param[2:(ncol(X) +1)]
+      psi_new <- param[(ncol(X)+2):length(param)]
+      a_new <- 1
+    }else if(model_type == "learn_graph"){
+      beta_new <- param[2:(ncol(X) +1)]
+      a_new <- param[(ncol(X)+2):length(param)]
+      A <- get_W_from_array(a_new, nr_regions)
+      psi_new <- NA
+    }
+    
+    
+    
+    
+    # Compute spatial aggregate effects and baseline nu
+    se_new <- get_spatial_aggregate(locs_batch, A, psi_new, agg_claims, years_batch, model_type)
+    nu_new <- as.numeric(exp(X_batch %*% beta_new))  # baseline mu from covariates
+    
+    # Get full mu by combining covariate effects (nu), spatial effects, and exposure
+    mu_new <- get_mu(nu_new, se_new$spatial_effect, exposure_batch, additive)
+    
+    grad_mu <- expected_h(y = claims_batch, phi = phi_new, pi = pi_est, mu = mu_new, z_density = z_density,
+                          h_func = h_hurdle_mu_func, likelihood_func = hurdle_likelihood_func,
+                          method  = "integration", S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity,
+                          mu_old = mu_batch, phi_old = exp(beta_phi_old))
+    
+    
+    grad_beta_total <- get_grad_beta(additive, grad_mu, nu_new, exposure_batch, X_batch, se_new$spatial_effect, locs_batch)
+    
+    # Compute psi/a gradient
+    if(model_type == "learn_graph"){
+      grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_new, lambda, nr_regions)
+    }else if (model_type == "learn_psi"){
+      grad_psi_total <- get_grad_psi(additive, grad_mu, se_new$agg_effect, nu_new, exposure_batch, locs_batch, nr_regions)
+    }
+    
+    # phi grad
+    grad_beta_phi_total <- get_grad_beta_phi(phi_new, mixing, w1, w2, w3, w4)
+    
+    
+    if(model_type == "learn_graph"){
+      return(-c(grad_beta_phi_total, grad_beta_total, grad_a_total ))
+    }else if (model_type == "learn_psi"){
+      return(-c(grad_beta_phi_total, grad_beta_total, grad_psi_total))
+    }
+    
+  }
+  
+
   control_list$S <- control_list$S %||%  1000
   control_list$n_nodes <- control_list$n_nodes %||%  50
   
@@ -99,11 +231,12 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   
   
   # Initialize parameters with non mixing Poisson
-  beta_phi <- 0
-  phi <- exp(beta_phi)
-  
   out_hurdle <- hurdle(claims, X, locs, years,  agg_claims, 
-                 A, additive, "learn_psi", lambda = 0, exposure = exposure, max_itr = 300)
+                 A, additive, model_type, lambda = lambda, exposure = exposure, max_itr = 300)
+  
+  # Initialize mixing parameters
+  beta_phi_est <- 0
+  phi <- exp(beta_phi_est)
   
   beta_est <- out_hurdle$beta1    # beta (d-dimensional)
   pi_est <- out_hurdle$prop
@@ -111,11 +244,13 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   a_est <- out_hurdle$a
   
   
-  # Default controls
+  # Default controls for gradient descent methods
   beta1_mom <- 0.9
   beta2_mom <- 0.999
   epsilon <- 1e-8
   momentum <- 0.07
+  
+  
   
   
   # Set gradient descent controls 
@@ -141,7 +276,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   
   
   controls$beta_phi <- get_controls(optimizer_beta_phi,  
-                                    lr = control_list$beta_phi$lr %||%  0.05, 
+                                    lr = control_list$beta_phi$lr %||%  0.005, 
                                     len = 1, 
                                     beta1 = control_list$beta_phi$beta1 %||%  beta1_mom, 
                                     beta2 = control_list$beta_phi$beta2 %||%  beta2_mom , 
@@ -168,15 +303,15 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   
   N <- length(claims)
   # (Assuming get_spatial_aggregate() and get_mu() are defined in utils.R)
-  cat("\nStarting updates for beta, pi (Adam) and psi (Adagrad):\n")
+  cat("\nStarting EM updates:\n")
   
   for (iter in 1:n_iter) {
     
     # 0. Prepare updates
     # Store old parameters and update
     beta_old <- beta_est
-    beta_phi_old <- beta_phi
-    phi <- exp(beta_phi)
+    beta_phi_old <- beta_phi_est
+    phi <- exp(beta_phi_est)
     
     if(model_type == "learn_graph"){
       a_old <- a_est
@@ -225,95 +360,155 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
       agg_effect_batch <- se$agg_effect
     }
     
-    
-    # 1. E-steps
-    # Compute expected derivative with respect to mu
-    grad_mu <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
-                          h_func = h_mu_func, likelihood_func = hurdle_likelihood_func, special_case = claims_batch == 0, special_fun  = function(z, y, pi, mu) 0,
-                          method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
-    
-
-    
+    # E-steps that can be calculated seperately:
     if(mixing == "gamma"){
-      w1 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+      w1 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
                        h_func = function(z, y, pi, mu) identity(z), likelihood_func = hurdle_likelihood_func, 
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
       
-      w2 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+      w2 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
                        h_func = function(z, y, pi, mu) log(z), likelihood_func = hurdle_likelihood_func, 
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
     }else if(mixing == "ig"){
-      w1 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+      w1 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
                        h_func = function(z, y, pi, mu) identity(z), likelihood_func = hurdle_likelihood_func, 
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
-      w3 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+      w3 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
                        h_func = function(z, y, pi, mu) 1/z, likelihood_func = hurdle_likelihood_func, 
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
     } else if(mixing == "ln"){
-      w4 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+      w4 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
                        h_func = function(z, y, pi, mu) log(z)^2, likelihood_func = hurdle_likelihood_func, 
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
     }
     
     
+    # Next we either optimize via L-BFGS-B 
+    # or some gradient descent method
     
-    
-    # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
-    grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, spatial_effect_batch, locs_batch)
-    
-    # Compute psi/a gradient
-    if(model_type == "learn_graph"){
-      grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_batch, lambda)
-    }else if (model_type == "learn_psi"){
-      grad_psi_total <- get_grad_psi(additive, grad_mu, agg_effect_batch, nu_batch, exposure_batch, locs_batch, nr_regions)
-    }
-    
-    
-    # phi grad
-    grad_beta_phi_total <- get_grad_beta_phi(phi, w1, w2, w3, w4)
-    
-    # scale gradient for sgd
-    if(sgd){
-      grad_beta_total <- grad_beta_total* (N / batch_size)  
-      if(model_type == "learn_graph"){
-        grad_a_total <- grad_a_total* (N / batch_size)  
-      }else if (model_type == "learn_psi"){
-        grad_psi_total <- grad_psi_total* (N / batch_size)  
-      }
-      grad_beta_phi_total <- grad_beta_phi_total* (N / batch_size)  
-    }
-    
-    # 2. M-steps - update according to gradient method
-    # update beta
-    beta_out <- update_gradient(optimizer_beta, beta_est, grad_beta_total, controls$beta)
-    beta_est <- beta_out$param
-    controls$beta <- beta_out$controls
-    
-    beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
-    
-    # update psi/a
-    if(model_type == "learn_graph"){
-      a_out <- update_gradient(optimizer_a, a_est, grad_a_total, controls$a)
-      a_est <- a_out$param
-      controls$a <- a_out$controls
-      a_est <- pmax(a_est, 1e-6)
-      spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
-    }else if(model_type == "learn_psi"){
-      psi_out <- update_gradient(optimizer_psi, psi_est, grad_psi_total, controls$psi)
-      psi_est <- psi_out$param
-      controls$psi <- psi_out$controls
-      psi_est <- pmax(psi_est, 1e-6)
-      spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
-    }
-    
+    if(do_optim){
 
+      
+      
+      if(model_type == "learn_graph"){
+        lower <- c(-Inf,  rep(-Inf,ncol(X)), rep(1e-8, nr_regions*(nr_regions+1)/2))
+        upper <- c(Inf, rep(Inf,ncol(X)), rep(Inf, nr_regions*(nr_regions+1)/2))
+        
+        out_optim <- optim(par = c(beta_phi_est, beta_est, a_est), fn = beta_optim, gr = beta_optim_grad, 
+                           control = list(maxit = 2), method = "L-BFGS-B",
+                           lower = lower,
+                           upper = upper
+        )
+        par <- out_optim$par
+        
+        beta_phi_est <- par[1]
+        beta_est <- par[2:(ncol(X)+1)]
+        a_est <- par[(ncol(X)+2):length(par)]
+        print(out_optim$message)
+        A <- get_W_from_array(a_est, nr_regions)
+        
+      }else if (model_type == "learn_psi"){
+        lower <- c(-Inf, rep(-Inf,ncol(X)), rep(1e-8, nr_regions))
+        upper <- c(Inf, rep(Inf,ncol(X)), rep(Inf, nr_regions))
+        
+        out_optim <- optim(par = c(beta_phi_est, beta_est, psi_est), fn = beta_optim, gr = beta_optim_grad, 
+                           control = list(maxit = 2), method = "L-BFGS-B",
+                           lower = lower,
+                           upper = upper
+        )
+        par <- out_optim$par
+        
+        beta_phi_est <- par[1]
+        beta_est <- par[2:(ncol(X)+1)]
+        psi_est <- par[(ncol(X)+2):length(par)]
+        print(out_optim$message)
+      }
+      
+      
+      
+      
+      
+      
+      beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
+      if(model_type == "learn_graph"){
+        spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
+      }else if(model_type == "learn_psi"){
+        spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
+      }
+      
+    }else{
+      
+      # 1. E-steps
+      # Compute expected derivative with respect to mu
+      grad_mu <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+                            h_func = h_hurdle_mu_func, likelihood_func = hurdle_likelihood_func, special_case = claims_batch == 0, special_fun  = function(z, y, pi, mu) 0,
+                            method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
+      
     
-    # update phi
-    beta_phi_out <- update_gradient(optimizer_beta_phi, beta_phi, grad_beta_phi_total, controls$beta_phi)
-    beta_phi <- beta_phi_out$param
-    controls$beta_phi <- beta_phi_out$controls
+      # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
+      grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, spatial_effect_batch, locs_batch)
+      
+      # Compute psi/a gradient
+      if(model_type == "learn_graph"){
+        grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_batch, lambda, nr_regions)
+      }else if (model_type == "learn_psi"){
+        grad_psi_total <- get_grad_psi(additive, grad_mu, agg_effect_batch, nu_batch, exposure_batch, locs_batch, nr_regions)
+      }
+      
+      
+      # phi grad
+      grad_beta_phi_total <- get_grad_beta_phi(phi, mixing, w1, w2, w3, w4)
+      
+      # scale gradient for sgd
+      if(sgd){
+        grad_beta_total <- grad_beta_total* (N / batch_size)  
+        if(model_type == "learn_graph"){
+          grad_a_total <- grad_a_total* (N / batch_size)  
+        }else if (model_type == "learn_psi"){
+          grad_psi_total <- grad_psi_total* (N / batch_size)  
+        }
+        grad_beta_phi_total <- grad_beta_phi_total* (N / batch_size)  
+      }
+      
+      # 2. M-steps - update according to gradient method
+      # update beta
+      
+      beta_out <- update_gradient(optimizer_beta, beta_est, grad_beta_total, controls$beta)
+      beta_est <- beta_out$param
+      controls$beta <- beta_out$controls
+      
+      beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
+      
+      # update psi/a
+      if(model_type == "learn_graph"){
+        a_out <- update_gradient(optimizer_a, a_est, grad_a_total, controls$a)
+        a_est <- a_out$param
+        controls$a <- a_out$controls
+        a_est <- pmax(a_est, 1e-6 )
+        spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
+        psi_est <- NA
+        A <- get_W_from_array(a_est, nr_regions)
+      }else if(model_type == "learn_psi"){
+        psi_out <- update_gradient(optimizer_psi, psi_est, grad_psi_total, controls$psi)
+        psi_est <- psi_out$param
+        controls$psi <- psi_out$controls
+        psi_est <- pmax(psi_est, 1e-6)
+        spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
+        a_est <- NA
+      }
+      
+      
+      
+      # update phi
+      beta_phi_out <- update_gradient(optimizer_beta_phi, beta_phi_est, grad_beta_phi_total, controls$beta_phi)
+      beta_phi_est <- beta_phi_out$param
+      controls$beta_phi <- beta_phi_out$controls
+      
+      
+      
+    }
     
-    
+   
     
     # 3. Check Convergence
     if(beta_converged & spatial_converged  ){
@@ -334,8 +529,10 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     
     if(iter >1){
       log_lik_old <- log_lik
-      log_lik <- sum(log(zhurdle_log_lik_function(claims,  exp(beta_phi), pi_est,  mu,  z_density)))
-      
+      log_lik <- sum(log(zhurdle_log_lik_function(claims,  exp(beta_phi_est), pi_est,  mu,  z_density)))
+      if(model_type == "learn_graph"){
+        log_lik <- log_lik - lambda*sum(a_est)
+      }
       if(iter > 2){
         if(isTRUE(all.equal(log_lik, log_lik_old, tolerance = Q_tol))){
           print("Breaking because log-likelihood has stopped changing")
@@ -359,14 +556,14 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
                     iter,
                     paste(round(beta_est, 4), collapse = ", "),
                     paste(round(a_est, 4), collapse = ", "),
-                    beta_phi,
+                    beta_phi_est,
                     pi_est))
       }else if (model_type == "learn_psi"){
         cat(sprintf("Iteration %d: beta = [%s], psi = [%s], beta_phi = %f, pi = %f \n,",
                     iter,
                     paste(round(beta_est, 4), collapse = ", "),
                     paste(round(psi_est, 4), collapse = ", "),
-                    beta_phi,
+                    beta_phi_est,
                     pi_est))
       } 
     }
@@ -377,9 +574,17 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
     
   }
   
+  # Finalize 
+  # Hessian
+  
+  if(model_type == "learn_graph"){
+    Hessian <- optimHess(c(beta_phi_est, beta_est, a_est), fn = beta_optim, gr = beta_optim_grad)
+  }else if (model_type == "learn_psi"){
+    Hessian <- optimHess(c(beta_phi_est, beta_est, psi_est), fn = beta_optim, gr = beta_optim_grad)
+  }
   
   
-  
+  return(list(beta = beta_est, pi = pi_est, a = a_est, psi = psi_est, mu = mu, Hessian = Hessian, log_lik = log_lik ))
 }
 
 
@@ -387,7 +592,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
 # 4. Test
 #########################
 source("simulate_data.R")
-data_sim <- simulate_hurdle_claims(100, 20, "graph", TRUE, mixing = "gamma")
+data_sim <- simulate_claims(20, 100, "graph", TRUE, mixing = "ln", model_type = "hurdle",  exposure_lambda = 1)
 
 # Extract variables from simulation
 claims <- data_sim$claims
@@ -399,13 +604,18 @@ A <- data_sim$A
 exposure <- data_sim$exposure
 model_type <- "learn_graph"
 additive <- TRUE
-mixing <- "gamma"
+mixing <- "ln"
 
 
-hurdle_mixed (claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, 
-                         n_iter = 100, lambda = 0, optimizer_beta = "adam", optimizer_psi = "adam", 
-                         optimizer_a = "adam", optimizer_pi = "adam", optimizer_beta_phi = "adam", sgd = TRUE,
-                         batch_size = 100, param_tol = 1e-9, verbose = 1)
+
+out <- hurdle_mixed (claims = claims, X = X, years = years, locs = locs, agg_claims = agg_claims, A = A, exposure = exposure, 
+                     model_type = model_type,additive =  additive, mixing = mixing, 
+                         n_iter = 10, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
+                         optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
+                         batch_size = 100, param_tol = 1e-9, verbose = 2,  do_optim = FALSE, control_list = list(beta = list(lr = 0.000001),
+                                                                                                                a = list(lr = 0.001),
+                                                                                                                pi = list(lr = 1e-6),
+                                                                                                                beta_phi= list(lr = 1e-6)))
 
 #save.image("hurdle_test.R")
 

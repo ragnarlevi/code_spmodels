@@ -3,7 +3,31 @@
 # 1. Simulate Data
 #########################
 
-simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, model_type = "poisson"){
+
+
+# Function to generate a sparse matrix with positive numbers
+generateSparseMatrix <- function(nrows, ncols, density, minVal = 0.1, maxVal = 1) {
+  set.seed(123)
+  library(Matrix)
+  # Ensure that density is between 0 and 1
+  if (density < 0 || density > 1) {
+    stop("Density must be between 0 and 1.")
+  }
+  
+  # Use rsparsematrix to create the sparse matrix
+  # The rand.x function generates positive numbers (from runif)
+  sparse_mat <- rsparsematrix(nrow = nrows,
+                              ncol = ncols,
+                              density = density,
+                              symmetric = TRUE,
+                              rand.x = function(n) runif(n, min = minVal, max = maxVal))
+  
+  diag(sparse_mat) <- max(sparse_mat)*runif(nrows, 1.2, 1.5)
+  return(sparse_mat)
+}
+
+
+simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, model_type = "poisson", density = 0.4, exposure_lambda = 0){
   set.seed(123)
   
   # store claim data
@@ -15,7 +39,7 @@ simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, 
   years_vec <- rep(1:years, each = n)
   locs_vec <- c()
   
-  exposure <- rep(1, years*n)
+  exposure <- rpois(years*n, lambda = exposure_lambda) + 1
   
   y_latent <- matrix(rnorm(years*area), nrow = area, ncol = years)
   y_latent[y_latent < 0.4] <- 0
@@ -28,23 +52,24 @@ simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, 
   X_mat2 <- as.matrix(rep(1, n*years))
   beta1_true <- c(1, -1, 1)
   
-  A1_true <- outer(0.2*runif(area, 0, 2), 0.2*runif(area, 0, 2))
-  mask_true <- matrix(rbinom(area*area, size = 1, 0.3), nrow = area, ncol = area)
-  diag(mask_true) <- TRUE
-  A1_true <- A1_true * mask_true
-  A1_true <- A1_true + t(A1_true)
-  diag(A1_true) <- 0.1
+  A1_true <- as.matrix(generateSparseMatrix(area, area, density))
   
   
-  if(spatial_type== "graph"){
-    A1_true <- 15 * A1_true
-  }
   
   psi_true <- runif(area, 1, 3)
   
   prop_true <- 0.7
   p <- length(unique(locs))
-  beta2_true <- 1
+  
+  if(mixing == "none"){
+    beta2_true <- 0
+  } else if(mixing == "gamma"){
+    beta2_true <- 1
+  } else if(mixing == "ig"){
+    beta2_true <- 0.5
+  } else if(mixing == "ln"){
+    beta2_true <- 0
+  }
   
   # Generate data over time
   for(t in 1:years){
@@ -230,3 +255,120 @@ simulate_hurdle_claims <- function(n, years, spatial_type, additive, mixing, are
               years = years_vec, locs = locs_vec, exposure = exposure, 
               a = A1_true[upper.tri(A1_true, TRUE)] ))
 }
+
+
+
+evaluate_matrix_recovery <- function(A, A_est, threshold = 1e-3) {
+  # Check if matrices have identical dimensions
+  if (!all(dim(A) == dim(A_est))) {
+    stop("A and A_est must have the same dimensions.")
+  }
+  
+  # --- Method 1: Relative Reconstruction Error ---
+  # Frobenius norm error between A and its estimate A_est
+  relative_error <- norm(A - A_est, type = "F") / norm(A, type = "F")
+  
+  # --- Method 2: Link Recovery Metrics ---
+  # In A, consider an entry to represent a "link" if it is nonzero
+  true_links <- (A != 0)
+  
+  # For A_est, count an entry as a recovered link if its value exceeds the threshold.
+  # (If negative values might occur and you only care about magnitude, you can use abs(A_est).)
+  estimated_links <- (A_est > threshold)
+  
+  # Compute confusion counts
+  TP <- sum(true_links & estimated_links)       # True links correctly uncovered
+  FP <- sum(!true_links & estimated_links)      # False links (non-links predicted as links)
+  FN <- sum(true_links & !estimated_links)      # Missed links
+  TN <- sum(!true_links & !estimated_links)     # Correctly absent links
+  
+  # Calculate precision, recall, and F1 score
+  precision <- if ((TP + FP) > 0) TP / (TP + FP) else NA
+  recall    <- if ((TP + FN) > 0) TP / (TP + FN) else NA
+  f1_score  <- if (!is.na(precision) && !is.na(recall) && (precision + recall) > 0)
+    2 * precision * recall / (precision + recall)
+  else NA
+  
+  # Create a confusion matrix.
+  # Rows are actual classes, and columns are predicted classes.
+  confusion_matrix <- matrix(c(TP, FN, FP, TN), nrow = 2, byrow = TRUE)
+  rownames(confusion_matrix) <- c("Actual Positive", "Actual Negative")
+  colnames(confusion_matrix) <- c("Predicted Positive", "Predicted Negative")
+  
+  # Return all computed metrics as a list
+  list(
+    relative_error = relative_error,
+    precision = precision,
+    recall = recall,
+    f1_score = f1_score,
+    confusion_matrix = confusion_matrix
+  )
+}
+
+
+plot_graphs <- function(A_est, A_true){
+  A_est[abs(A_est) <= 1e-3 ]<- 0
+  # suppose A_true and A_est are your two N×N 0/1 matrices
+  df <- expand.grid(i = 1:nrow(A_true), j = 1:ncol(A_true)) %>%
+    mutate(
+      true = as.vector(A_true),
+      est  = as.vector(A_est),
+      type = case_when(
+        abs(true) > 1e-3 & abs(est) > 1e-3 ~ "TP",
+        abs(true) > 1e-3 & abs(est) <= 1e-3 ~ "FN",
+        abs(true) <= 1e-3  & abs(est) > 1e-3 ~ "FP",
+        TRUE                ~ "TN"
+      )
+    )
+  
+  true_false_graph <- ggplot(df, aes(x = j, y = i, fill = type)) +
+    geom_tile(color = "grey80") +
+    # flip the y-axis so row 1 appears at the top
+    scale_y_reverse(breaks = 1:nrow(A_true)) +
+    coord_equal() +
+    scale_fill_manual(
+      values = c(TP = "#1b9e77", FN = "#d95f02", FP = "#DE3163", TN = "white")
+    ) +
+    theme_minimal(base_size = 14) +
+    labs(
+      x = "Column (j)",
+      y = "Row (i)",
+      fill = "Edge type",
+      title = "True vs. Estimated Adjacency (matrix layout)"
+    )
+  
+  # suppose A_true and A_est are your two N×N 0/1 matrices
+  # turn them into a long data frame with a “which” indicator
+  df_true <- expand.grid(i = 1:nrow(A_true), j = 1:ncol(A_true)) %>%
+    mutate(type = "True", value = as.vector(A_true))
+  
+  df_est  <- expand.grid(i = 1:nrow(A_est), j = 1:ncol(A_est)) %>%
+    mutate(type = "Estimated", value = as.vector(A_est))
+  
+  df_long <- bind_rows(df_true, df_est)
+  
+  # now plot with facet
+  side_by_side <- ggplot(df_long, aes(x = j, y = i, fill = factor(value))) +
+    geom_tile(color = "grey80") +
+    scale_y_reverse(breaks = 1:nrow(A_true)) +
+    coord_equal() +
+    scale_fill_manual(
+      values = c(`0` = "white", `1` = "#1b9e77"),
+      labels = c("0" = "no edge", "1" = "edge")
+    ) +
+    facet_wrap(~type, ncol = 2) +
+    theme_minimal(base_size = 14) +
+    labs(
+      x = "Column (j)",
+      y = "Row (i)",
+      fill = "Presence",
+      title = "True vs. Estimated Adjacency Matrices"
+    )
+  
+  
+  
+  return(list(true_false_graph = true_false_graph, side_by_side = side_by_side))
+  
+}
+
+

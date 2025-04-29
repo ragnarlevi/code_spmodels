@@ -10,14 +10,18 @@ source("simulate_data.R")
 
 # Function inside the E-step
 h_mu_func <- function(z, y, pi, mu) {
-  if (y == 0) {
-    den <- pi * exp(z * mu) + (1 - pi)
-    h_val <- ifelse(is.finite(den), -((1 - pi) * z) / den, 0)
-    return(h_val)
+  if (y==0) {
+    num   <- -(1 - pi) * z * exp(-z * mu)
+    den   <-  pi + (1 - pi) * exp(-z * mu)
+    return(num/den)
   } else {
-    return((y / mu) - z)
+    return((y/mu) - z)
   }
 }
+
+
+
+#h_mu_func <- Vectorize(h_mu_func, vectorize.args = c("z", "y", "pi", "mu"))
 
 h_pi_func <- function(z, y, pi, mu) {
   if (y == 0) {
@@ -28,34 +32,45 @@ h_pi_func <- function(z, y, pi, mu) {
     return((y / mu) - z)
   }
 }
+#h_pi_func <- Vectorize(h_pi_func, vectorize.args = c("z", "y", "pi", "mu"))
 
 # Function to compute the likelihood
 zip_likelihood_func <- function(z, y, pi, mu) {
   if (y == 0) {
     return(pi + (1 - pi) * exp(-z * mu))
   } else {
-    return((1 - pi) * ((z * mu)^y * exp(-z * mu)) / gamma(y + 1))
+    return((1 - pi) * dpois(y, z*mu))
+  }
+}
+#zip_likelihood_func <- Vectorize(zip_likelihood_func, vectorize.args = c("z", "y", "pi", "mu"))
+
+log_zip_likelihood_func <- function(z, y, pi, mu) {
+  if (y == 0) {
+    return(log(pi + (1 - pi) * exp(-z * mu)))
+  } else {
+    return(log(1 - pi) +  dpois(y, z*mu, log = TRUE))
   }
 }
 
+#log_zip_likelihood_func <- Vectorize(log_zip_likelihood_func, vectorize.args = c("z", "y", "pi", "mu"))
 
 
 
-expected_pi_grad <- function(y, beta, phi, pi, mu, z_density, do_integral = TRUE) {
+
+expected_pi_grad <- function(y, beta, phi, pi, mu, z_density, phi_old = phi, pi_old = pi) {
 
   # THE DO_INTEGRAL IS JUST TO TEST DERIVATIVES
-  if(do_integral){
     if (y == 0) {
       integrand_num <- function(z) {
         num <- (1 - exp(-z * mu))
         denom <- pi + (1 - pi) * exp(-z * mu)
-        val <- (num / denom) * (pi + (1 - pi) * exp(-z * mu)) * z_density(z, phi)
+        val <- (num / denom) * (pi_old + (1 - pi_old) * exp(-z * mu)) * z_density(z, phi_old)
         val[!is.finite(val)] <- 0
         return(val)
       }
       integrand_denom <- function(z) {
-        lik <- pi + (1 - pi) * exp(-z * mu)
-        val <- lik * z_density(z, phi)
+        lik <- pi_old + (1 - pi_old) * exp(-z * mu)
+        val <- lik * z_density(z, phi_old)
         val[!is.finite(val)] <- 0
         return(val)
       }
@@ -66,18 +81,6 @@ expected_pi_grad <- function(y, beta, phi, pi, mu, z_density, do_integral = TRUE
     } else {
       return(-1 / (1 - pi))
     } 
-  }else{
-    if (y == 0) {
-        num <- (1 - exp(-1 * mu))
-        denom <- pi + (1 - pi) * exp(-1 * mu)
-        val <- (num / denom) 
-        val[!is.finite(val)] <- 0
-      return(val)
-    } else {
-      return(-1 / (1 - pi))
-    } 
-    
-  }
 
 
 }
@@ -85,26 +88,57 @@ expected_pi_grad <- Vectorize(expected_pi_grad, vectorize.args = c("y", "mu"))
 
 
 
-zzip_log_lik_function <- function(y,  phi, pi, mu, z_density) {
+zzip_log_lik_function <- function(y, phi, pi, mu, z_density) {
   
-  # f(y|z) for y > 0 under the zip  model:
+  # f(y|z) for y > 0 under the ZIP model:
   f_y_given_z <- function(z) {
     zip_likelihood_func(z, y, pi, mu)
   }
   
-  # Numerator: integrate h(z)*f(y|z)*f(z) over z
-  numerator_integrand <- function(z) {
-    f_y_given_z(z) * z_density(z, phi)
-  }
+  # lik <-     integrate(
+  #   function(z) f_y_given_z(z) * z_density(z, phi),
+  #   lower      = 1e-3,
+  #   upper      = Inf,
+  #   subdivisions = 1000,
+  #   rel.tol    = 1e-8
+  # )$value
   
-  
-  
-  num_result <- integrate(numerator_integrand, lower = 1e-3, subdivisions = 1000,  upper = Inf, rel.tol = 1e-8)
-  
-  
-  lik <- num_result$value 
+  # safe integration: try integrate(), otherwise fallback to Legendre
+  lik <- tryCatch({
+    # numerator: ∫ f(y|z) f(z) dz
+    integrate(
+      function(z) f_y_given_z(z) * z_density(z, phi),
+      lower      = 1e-3,
+      upper      = Inf,
+      subdivisions = 1000,
+      rel.tol    = 1e-8
+    )$value
+  }, error = function(e) {
+    
+        warning("`integrate()` failed: ", paste0(y, " ", mu, " ", pi, " ", phi),
+                "\n  falling back to Gauss–Legendre quadrature.")
+
+    # — fallback Gauss–Legendre —
+    quad     <- statmod::gauss.quad(50, kind = "legendre")
+    t_nodes  <- (quad$nodes + 1) / 2
+    t_weights<- quad$weights / 2
+
+    # transform [0,1] → [0,∞): z = t/(1−t), dz = 1/(1−t)^2 dt
+    z_vals   <- t_nodes / (1 - t_nodes)
+    jacobian <- 1 / (1 - t_nodes)^2
+
+    num_quad <- sum(
+      t_weights *
+        ( sapply(z_vals, function(z) f_y_given_z(z) * z_density(z, phi)) * jacobian ),
+      na.rm = TRUE
+    )
+
+    num_quad
+  })
+
   return(lik)
 }
+
 zzip_log_lik_function <- Vectorize(zzip_log_lik_function, vectorize.args = c("y", "mu"))
 
 
@@ -115,10 +149,116 @@ zzip_log_lik_function <- Vectorize(zzip_log_lik_function, vectorize.args = c("y"
 zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, Emethod = "integration",
                          n_iter = 100, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, ...){
+                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, control_list = list(), do_optim = TRUE){
   
   
-  control_list <- list(...)
+  # Start by defining two functions that go into the optim base package to
+  # 1. Perform L-BFGS-B method
+  # 2. Obtain Hessian for standard error calculations
+  beta_optim <- function(param){
+    
+    beta_phi_new <- param[1]
+    pi_new <- param[2]
+    phi_new <- exp(beta_phi_new)
+    
+    
+    if(model_type == "ordinary"){
+      beta_new <- param[3:(ncol(X)+2)]
+    }else if(model_type == "learn_psi"){
+      beta_new <- param[3:(ncol(X) +2)]
+      psi_new <- param[(ncol(X)+3):length(param)]
+      a_new <- 1
+    }else if(model_type == "learn_graph"){
+      beta_new <- param[3:(ncol(X) +2)]
+      a_new <- param[(ncol(X)+3):length(param)]
+      A <- get_W_from_array(a_new, nr_regions)
+      psi_new <- NA
+    }
+    
+    
+    # Compute spatial aggregate effects and baseline nu
+    se_new <- get_spatial_aggregate(locs_batch, A, psi_est, agg_claims, years_batch, model_type)
+    nu_new <- as.numeric(exp(X_batch %*% beta_new))  # baseline mu from covariates
+    
+    # Get full mu by combining covariate effects (nu), spatial effects, and exposure
+    mu_new <- get_mu(nu_new, se_new$spatial_effect, exposure_batch, additive)
+    
+    
+    
+    lik <- expected_h(y = claims_batch, phi = phi_new, pi = pi_new, mu = mu_new, z_density = z_density,
+                      h_func = log_zip_likelihood_func, likelihood_func = zip_likelihood_func,
+                      method  = "integration", S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity,
+                      mu_old = mu_batch, phi_old = exp(beta_phi_old), pi_old = pi_old)
+    
+    
+    return(-sum(lik))
+    
+  }
+  
+  beta_optim_grad <- function(param){
+    beta_phi_new <- param[1]
+    pi_new <- param[2]
+    phi_new <- exp(beta_phi_new)
+    
+    
+    if(model_type == "ordinary"){
+      beta_new <- param[3:(ncol(X)+2)]
+    }else if(model_type == "learn_psi"){
+      beta_new <- param[3:(ncol(X) +2)]
+      psi_new <- param[(ncol(X)+3):length(param)]
+      a_new <- 1
+    }else if(model_type == "learn_graph" ){
+      beta_new <- param[3:(ncol(X) +2)]
+      a_new <- param[(ncol(X)+3):length(param)]
+      A <- get_W_from_array(a_new, nr_regions)
+      psi_new <- NA
+    }
+    
+    
+    
+    # Compute spatial aggregate effects and baseline nu
+    se_new <- get_spatial_aggregate(locs_batch, A, psi_new, agg_claims, years_batch, model_type)
+    nu_new <- as.numeric(exp(X_batch %*% beta_new))  # baseline mu from covariates
+    
+    # Get full mu by combining covariate effects (nu), spatial effects, and exposure
+    mu_new <- get_mu(nu_new, se_new$spatial_effect, exposure_batch, additive)
+    
+    grad_mu <- expected_h(y = claims_batch, phi = phi_new, pi = pi_new, mu = mu_new, z_density = z_density,
+                          h_func = h_mu_func, likelihood_func = zip_likelihood_func,
+                          method  = "integration", S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity,
+                          mu_old = mu_batch, phi_old = exp(beta_phi_old), pi_old = pi_old)
+    
+    grad_pi <- expected_pi_grad(y = claims_batch, phi = phi_new, pi = pi_new, mu = mu_new, z_density = z_density, 
+                                phi_old = exp(beta_phi_old), pi_old = pi_old)
+    
+    grad_beta_total <- get_grad_beta(additive, grad_mu, nu_new, exposure_batch, X_batch, se_new$spatial_effect, locs_batch)
+    
+    # Compute psi/a gradient
+    if(model_type == "learn_graph"){
+      grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_new, lambda, nr_regions)
+    }else if (model_type == "learn_psi"){
+      grad_psi_total <- get_grad_psi(additive, grad_mu, se_new$agg_effect, nu_new, exposure_batch, locs_batch, nr_regions)
+    }
+    
+    # Compute gradient for pi (scalar)
+    grad_pi_total <- get_grad_pi(grad_pi)
+    
+    # phi grad
+    grad_beta_phi_total <- get_grad_beta_phi(phi_new, mixing, w1, w2, w3, w4)
+    
+    
+    if(model_type == "learn_graph"){
+      return(-c(grad_beta_phi_total, grad_pi_total, grad_beta_total, grad_a_total ))
+    }else if (model_type == "learn_psi"){
+      return(-c(grad_beta_phi_total, grad_pi_total, grad_beta_total, grad_psi_total))
+    }
+    
+  }
+  
+  
+  
+  
+  
   control_list$S <- control_list$S %||%  1000
   control_list$n_nodes <- control_list$n_nodes %||%  50
   
@@ -145,29 +285,34 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   
   # Initialize parameters with non mixing Poisson
-  beta_phi <- 0
-  phi <- exp(beta_phi)
-  
   out_zip <- zip(claims, X, locs, years,  agg_claims, 
-                 A, additive, "learn_psi", lambda = 0, exposure = exposure, max_itr = 300)
+                 A, additive, model_type, lambda = lambda, exposure = exposure, max_itr = 300)
+  
+  # Initialize mixing parameters
+  beta_phi_est <- 0
+  phi <- exp(beta_phi_est)
   
   beta_est <- out_zip$beta1    # beta (d-dimensional)
   pi_est <- out_zip$prop
   psi_est <- out_zip$psi     # psi (vector of length nr_regions)
   a_est <- out_zip$a
   
+  print(beta_est)
+  print(pi_est)
+
   
-  # Default controls
+  # Default controls for gradient descent methods
   beta1_mom <- 0.9
   beta2_mom <- 0.999
   epsilon <- 1e-8
   momentum <- 0.07
-  
+
+  nr_time <- length(unique(years))
   
   # Set gradient descent controls 
   controls <- list()
   controls$beta <- get_controls(optimizer_beta,  
-                                lr = control_list$beta$lr %||%  0.01, 
+                                lr = control_list$beta$lr %||%  1/nrow(X), 
                                 len = d, 
                                 beta1 = control_list$beta$beta1 %||%  beta1_mom, 
                                 beta2 = control_list$beta$beta2 %||%  beta2_mom , 
@@ -177,7 +322,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   
   controls$psi <- get_controls(optimizer_psi,  
-                               lr = control_list$psi$lr %||%  0.01, 
+                               lr = control_list$psi$lr %||%  1/nr_time, 
                                len = nr_regions, 
                                beta1 = control_list$psi$beta1 %||%  beta1_mom, 
                                beta2 = control_list$psi$beta2 %||%  beta2_mom , 
@@ -187,7 +332,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   
   controls$beta_phi <- get_controls(optimizer_beta_phi,  
-                                    lr = control_list$beta_phi$lr %||%  0.05, 
+                                    lr = control_list$beta_phi$lr %||%  1/nrow(X), 
                                     len = 1, 
                                     beta1 = control_list$beta_phi$beta1 %||%  beta1_mom, 
                                     beta2 = control_list$beta_phi$beta2 %||%  beta2_mom , 
@@ -196,7 +341,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
                                     momentum = control_list$beta_phi$momentum %||%  momentum )
   
   controls$a <- get_controls(optimizer_a,  
-                             lr = control_list$a$lr %||%  0.01, 
+                             lr = control_list$a$lr %||%  1/nr_time, 
                              len = nr_edges, 
                              beta1 = control_list$a$beta1 %||%  beta1_mom, 
                              beta2 = control_list$a$beta2 %||%  beta2_mom , 
@@ -206,13 +351,14 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   
   controls$pi <- get_controls(optimizer_pi, 
-                              lr = control_list$pi$lr %||% 0.0001, 
+                              lr = control_list$pi$lr %||% 0.1/nrow(X), 
                               len = 1, 
                               beta1 = control_list$pi$beta1 %||%  beta1_mom,
                               beta2 = control_list$pi$beta2 %||%  beta2_mom, 
                               epsilon = epsilon, 
                               iter = 1, 
                               momentum = control_list$pi$momentum %||%  momentum)
+  
   
   # Start the loop
   beta_nrom <- c()
@@ -222,15 +368,16 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   N <- length(claims)
   # (Assuming get_spatial_aggregate() and get_mu() are defined in utils.R)
-  cat("\nStarting updates for beta, pi (Adam) and psi (Adagrad):\n")
+  cat("\nStarting EM updates:\n")
   
   for (iter in 1:n_iter) {
     
     # 0. Prepare updates
     # Store old parameters and update
+    pi_old <- pi_est
     beta_old <- beta_est
-    beta_phi_old <- beta_phi
-    phi <- exp(beta_phi)
+    beta_phi_old <- beta_phi_est
+    phi <- exp(beta_phi_est)
     
     if(model_type == "learn_graph"){
       a_old <- a_est
@@ -279,103 +426,156 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
       agg_effect_batch <- se$agg_effect
     }
     
-    
-    # 1. E-steps
-    # Compute expected derivative with respect to mu
-    grad_mu <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
-                          h_func = h_mu_func, likelihood_func = zip_likelihood_func, 
-                          method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
-    
-    grad_pi <- expected_pi_grad(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, TRUE)
-    
+    # E-steps that can be calculated seperately:
     
     if(mixing == "gamma"){
-      w1 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
+      w1 <- expected_h(y = claims_batch,  phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density,
                        h_func = function(z, y, pi, mu) identity(z), likelihood_func = zip_likelihood_func, method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
-      w2 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
-                       h_func = function(z, y, pi, mu) log(z), likelihood_func = zip_likelihood_func, 
+      w2 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density,
+                       h_func = function(z, y, pi, mu) log(z), likelihood_func = zip_likelihood_func,
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
     }else if(mixing == "ig"){
-      w1 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
-                       h_func = function(z, y, pi, mu) identity(z), likelihood_func = zip_likelihood_func, 
+      w1 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density,
+                       h_func = function(z, y, pi, mu) identity(z), likelihood_func = zip_likelihood_func,
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
-      w3 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
-                       h_func = function(z, y, pi, mu) 1/z, likelihood_func = zip_likelihood_func, 
+      w3 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density,
+                       h_func = function(z, y, pi, mu) 1/z, likelihood_func = zip_likelihood_func,
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
     } else if(mixing == "ln"){
-      w4 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density, 
-                       h_func = function(z, y, pi, mu) log(z)^2, likelihood_func = zip_likelihood_func, 
+      w4 <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density,
+                       h_func = function(z, y, pi, mu) log(z)^2, likelihood_func = zip_likelihood_func,
                        method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
     }
     
     
+    # Next we either optimize via L-BFGS-B 
+    # or some gradient descent method
     
-    
-    # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
-    grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, spatial_effect_batch, locs_batch)
-    
-    # Compute psi/a gradient
-    if(model_type == "learn_graph"){
-      grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_batch, lambda)
-    }else if (model_type == "learn_psi"){
-      grad_psi_total <- get_grad_psi(additive, grad_mu, agg_effect_batch, nu_batch, exposure_batch, locs_batch, nr_regions)
-    }
-    
-    # Compute gradient for pi (scalar)
-    grad_pi_total <- get_grad_pi(grad_pi)
-    
-    # phi grad
-    grad_beta_phi_total <- get_grad_beta_phi(phi, w1, w2, w3, w4)
-    
-    # scale gradient for sgd
-    if(sgd){
-      grad_beta_total <- grad_beta_total* (N / batch_size)  
+    if(do_optim){
+
       if(model_type == "learn_graph"){
-        grad_a_total <- grad_a_total* (N / batch_size)  
+        print("doing optim")
+        lower <- c(-Inf, 1e-3, rep(-Inf,ncol(X)), rep(1e-8, nr_regions*(nr_regions+1)/2))
+        upper <- c(Inf, 1-1e-3, rep(Inf,ncol(X)), rep(Inf, nr_regions*(nr_regions+1)/2))
+        
+        out_optim <- optim(par = c(beta_phi_est, pi_est, beta_est, a_est), fn = beta_optim, gr = beta_optim_grad, 
+                           control = list(maxit = 2, trace = 3), method = "L-BFGS-B",
+                           lower = lower,
+                           upper = upper
+        )
+        par <- out_optim$par
+        
+        beta_phi_est <- par[1]
+        pi_est <- par[2]
+        beta_est <- par[3:(ncol(X)+2)]
+        a_est <- par[(ncol(X)+3):length(par)]
+        print(out_optim$message)
+        A <- get_W_from_array(a_est, nr_regions)
+        
       }else if (model_type == "learn_psi"){
-        grad_psi_total <- grad_psi_total* (N / batch_size)  
+        lower <- c(-Inf, 1e-3, rep(-Inf,ncol(X)), rep(1e-8, nr_regions))
+        upper <- c(Inf, 1-1e-3, rep(Inf,ncol(X)), rep(Inf, nr_regions))
+        
+        out_optim <- optim(par = c(beta_phi_est, pi_est, beta_est, psi_est), fn = beta_optim, gr = beta_optim_grad, 
+                           control = list(maxit = 2, trace = 3), method = "L-BFGS-B",
+                           lower = lower,
+                           upper = upper
+        )
+        par <- out_optim$par
+        
+        beta_phi_est <- par[1]
+        pi_est <- par[2]
+        beta_est <- par[3:(ncol(X)+2)]
+        psi_est <- par[(ncol(X)+3):length(par)]
+        print(out_optim$message)
       }
-      grad_pi_total <- grad_pi_total* (N / batch_size)  
-      grad_beta_phi_total <- grad_beta_phi_total* (N / batch_size)  
+      
+      
+      beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
+      if(model_type == "learn_graph"){
+        spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
+      }else if(model_type == "learn_psi"){
+        spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
+      }
+      
+    }else{
+      # 1. E-steps
+      # Compute expected derivative with respect to mu
+      grad_mu <- expected_h(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density,
+                            h_func = h_mu_func, likelihood_func = zip_likelihood_func,
+                            method  = Emethod, S = control_list$S, n_nodes = control_list$n_nodes, rzdensity = rzdensity)
+      
+      grad_pi <- expected_pi_grad(y = claims_batch, phi = phi, pi = pi_est, mu = mu_batch, z_density = z_density)
+      
+      
+      # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
+      grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, spatial_effect_batch, locs_batch)
+      
+      # Compute psi/a gradient
+      if(model_type == "learn_graph"){
+        grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_batch, lambda, nr_regions)
+      }else if (model_type == "learn_psi"){
+        grad_psi_total <- get_grad_psi(additive, grad_mu, agg_effect_batch, nu_batch, exposure_batch, locs_batch, nr_regions)
+      }
+      
+      # Compute gradient for pi (scalar)
+      grad_pi_total <- get_grad_pi(grad_pi)
+      
+      # phi grad
+      grad_beta_phi_total <- get_grad_beta_phi(phi,mixing, w1, w2, w3, w4)
+      
+      # scale gradient for sgd
+      if(sgd){
+        grad_beta_total <- grad_beta_total* (N / batch_size)
+        if(model_type == "learn_graph"){
+          grad_a_total <- grad_a_total* (N / batch_size)
+        }else if (model_type == "learn_psi"){
+          grad_psi_total <- grad_psi_total* (N / batch_size)
+        }
+        grad_pi_total <- grad_pi_total* (N / batch_size)
+        grad_beta_phi_total <- grad_beta_phi_total* (N / batch_size)
+      }
+      
+      # 2. M-steps - update according to gradient method
+      # update beta
+      
+      
+      beta_out <- update_gradient(optimizer_beta, beta_est, grad_beta_total, controls$beta)
+      beta_est <- beta_out$param
+      controls$beta <- beta_out$controls
+      
+      beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
+      
+      # # update psi/a
+      if(model_type == "learn_graph"){
+        a_out <- update_gradient(optimizer_a, a_est, grad_a_total, controls$a)
+        a_est <- a_out$param
+        controls$a <- a_out$controls
+        a_est <- pmax(a_est, 1e-6)
+        spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
+        A <- get_W_from_array(a_est, nr_regions)
+      }else if(model_type == "learn_psi"){
+        psi_out <- update_gradient(optimizer_psi, psi_est, grad_psi_total, controls$psi)
+        psi_est <- psi_out$param
+        controls$psi <- psi_out$controls
+        psi_est <- pmax(psi_est, 1e-6)
+        spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
+      }
+      
+      
+      # update pi
+      pi_out <- update_gradient(optimizer_pi, pi_est, grad_pi_total, controls$pi)
+      pi_est <- pi_out$param
+      controls$pi <- pi_out$controls
+      pi_est <- pmin(pmax(pi_est, 1e-6), 1-1e-6)
+
+      
+      # update phi
+      beta_phi_out <- update_gradient(optimizer_beta_phi, beta_phi_est, grad_beta_phi_total, controls$beta_phi)
+      beta_phi_est <- beta_phi_out$param
+      controls$beta_phi <- beta_phi_out$controls
+      
     }
-    
-    # 2. M-steps - update according to gradient method
-    # update beta
-    beta_out <- update_gradient(optimizer_beta, beta_est, grad_beta_total, controls$beta)
-    beta_est <- beta_out$param
-    controls$beta <- beta_out$controls
-    
-    beta_converged <-  isTRUE(all.equal(beta_est, beta_old, tolerance = param_tol)) 
-    
-    # update psi/a
-    if(model_type == "learn_graph"){
-      a_out <- update_gradient(optimizer_a, a_est, grad_a_total, controls$a)
-      a_est <- a_out$param
-      controls$a <- a_out$controls
-      a_est <- pmax(a_est, 1e-6)
-      spatial_converged <- isTRUE(all.equal(a_est, a_old, tolerance = param_tol)) 
-    }else if(model_type == "learn_psi"){
-      psi_out <- update_gradient(optimizer_psi, psi_est, grad_psi_total, controls$psi)
-      psi_est <- psi_out$param
-      controls$psi <- psi_out$controls
-      psi_est <- pmax(psi_est, 1e-6)
-      spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
-    }
-    
-    
-    # update pi
-    pi_out <- update_gradient(optimizer_pi, pi_est, grad_pi_total, controls$pi)
-    pi_est <- pi_out$param
-    controls$pi <- pi_out$controls
-    pi_est <- pmin(pmax(pi_est, 1e-6), 1-1e-6)
-    
-    
-    # update phi
-    beta_phi_out <- update_gradient(optimizer_beta_phi, beta_phi, grad_beta_phi_total, controls$beta_phi)
-    beta_phi <- beta_phi_out$param
-    controls$beta_phi <- beta_phi_out$controls
-    
-    
     
     # 3. Check Convergence
     if(beta_converged & spatial_converged  ){
@@ -392,14 +592,19 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
     # Get full mu by combining covariate effects (nu), spatial effects, and exposure
     mu <- get_mu(nu, se$spatial_effect, exposure, additive)
     
-    
-    
+
     if(iter >1){
       log_lik_old <- log_lik
-      log_lik <- sum(log(zzip_log_lik_function(claims,  exp(beta_phi), pi_est,  mu,  z_density)))
+
+      log_lik <- sum(log(zzip_log_lik_function(claims,  exp(beta_phi_est), pi_est,  mu,  z_density))) 
+      if(model_type == "learn_graph"){
+        log_lik <- log_lik - lambda*sum(a_est)
+      }
+      print(log_lik)
       
       if(iter > 2){
         if(isTRUE(all.equal(log_lik, log_lik_old, tolerance = Q_tol))){
+          
           print("Breaking because log-likelihood has stopped changing")
           break
         } 
@@ -412,7 +617,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
     }
     
     if(verbose >= 1){
-      print(paste0("log-likelihood value  ",sum(log_lik)))
+      print(paste0("log-likelihood value  ", sum(log_lik)))
     }
     
     if(verbose >=2){
@@ -421,14 +626,14 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
                     iter,
                     paste(round(beta_est, 4), collapse = ", "),
                     paste(round(a_est, 4), collapse = ", "),
-                    beta_phi,
+                    beta_phi_est,
                     pi_est))
       }else if (model_type == "learn_psi"){
         cat(sprintf("Iteration %d: beta = [%s], psi = [%s], beta_phi = %f, pi = %f \n,",
                     iter,
                     paste(round(beta_est, 4), collapse = ", "),
                     paste(round(psi_est, 4), collapse = ", "),
-                    beta_phi,
+                    beta_phi_est,
                     pi_est))
       } 
     }
@@ -439,259 +644,126 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
     
   }
   
+  if(verbose >= 1){
+    print(paste0("log-likelihood value  ",sum(log_lik)))
+  }
+  
+  if(verbose >=2){
+    if(model_type == "learn_graph"){
+      cat(sprintf("Iteration %d: beta = [%s], a = [%s], beta_phi = %f, pi = %f \n,",
+                  iter,
+                  paste(round(beta_est, 4), collapse = ", "),
+                  paste(round(a_est, 4), collapse = ", "),
+                  beta_phi_est,
+                  pi_est))
+    }else if (model_type == "learn_psi"){
+      cat(sprintf("Iteration %d: beta = [%s], psi = [%s], beta_phi = %f, pi = %f \n,",
+                  iter,
+                  paste(round(beta_est, 4), collapse = ", "),
+                  paste(round(psi_est, 4), collapse = ", "),
+                  beta_phi_est,
+                  pi_est))
+    } 
+  }
   
   
+  
+  # Finalize 
+  # Hessian
+  
+  if(model_type == "learn_graph"){
+    Hessian <- optimHess(c(beta_phi_est, pi_est, beta_est, a_est), fn = beta_optim, gr = beta_optim_grad)
+  }else if (model_type == "learn_psi"){
+    Hessian <- optimHess(c(beta_phi_est, pi_est, beta_est, psi_est), fn = beta_optim, gr = beta_optim_grad)
+  }
+  
+  
+  
+  return(list(beta = beta_est, pi = pi_est, a = a_est, psi = psi_est, mu = mu, Hessian = Hessian, log_lik = log_lik ))
   
 }
 
+# 
+# #########################
+# # 4. Test
+# #########################
+# n <- 100
+# t <- 500
+# data_sim <- simulate_claims(n, t, "graph", TRUE, mixing = "ln", model_type = "zip",  exposure_lambda = 0)
+# 
+# # Extract variables from simulation
+# claims <- data_sim$claims
+# X <- data_sim$X
+# years <- data_sim$years
+# locs <- data_sim$locs
+# agg_claims <- data_sim$agg_claims
+# A <- data_sim$A
+# exposure <- data_sim$exposure
+# model_type <- "learn_graph"
+# additive <- TRUE
+# mixing <- "ln"
+# 
+# 
+# out <- zip_mixed (claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing,  Emethod = "integration",
+#               n_iter = 50, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",Q_tol = 0,
+#               optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
+#               batch_size = 100, param_tol = 1e-9, verbose = 2, do_optim = FALSE)
 
-#########################
-# 4. Test
-#########################
-data_sim <- simulate_claims(100, 20, "psi", TRUE, mixing = "none", model_type = "zip")
-
-# Extract variables from simulation
-claims <- data_sim$claims
-X <- data_sim$X
-years <- data_sim$years
-locs <- data_sim$locs
-agg_claims <- data_sim$agg_claims
-A <- data_sim$A
-exposure <- data_sim$exposure
-model_type <- "learn_psi"
-additive <- TRUE
-mixing <- "ig"
 
 
-zip_mixed (claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, 
-              n_iter = 100, lambda = 0, optimizer_beta = "adam", optimizer_psi = "adam", 
-              optimizer_a = "adam", optimizer_pi = "adam", optimizer_beta_phi = "adam", sgd = FALSE,
-              batch_size = 100, param_tol = 1e-9, verbose = 1)
-
-
-
-# # Adam parameters for beta and pi
-# learning_rate_beta <- 0.05
-# learning_rate_pi <- 0.01
-# n_iter <- 500
-# d <- length(data_sim$beta1)  # dimension of beta
-# beta1_mom <- 0.9
-# beta2_mom <- 0.999
-# epsilon <- 1e-8
-# momentum <- 0.07
+# beta <- c(1.085694, -1.132421,  1.204425)
+# psi <- c(3.272312,  1.340114 , 1.266356 , 1.478949, 3.581623 )
 # 
-# # Get number of regions
-# nr_regions <- length(unique(data_sim$locs))
-# nr_edges <- nr_regions*(nr_regions+1)/2
-# beta_phi <- 0
-# phi <- exp(beta_phi)
+# se <- get_spatial_aggregate(data_sim$locs, data_sim$A, psi, data_sim$agg_claims, data_sim$years, model_type)
+# nu <- as.numeric(exp(X %*% beta))  # baseline mu from covariates
+# 
+# # Get full mu by combining covariate effects (nu), spatial effects, and exposure
+# mu <- get_mu(nu, se$spatial_effect, exposure, additive)
 # 
 # 
-# lambda <- 0
+# zzip_log_lik_function <- function(y,  phi, pi, mu, z_density)
+# zzip_log_lik_function(claims[3],  exp(1), 0.7,  mu[3],  gamma_density)
 # 
 # 
-# # Initialize parameters
-# out_zip <- zip(data_sim$claims, data_sim$X, data_sim$locs, data_sim$years,  data_sim$agg_claims, 
-#                data_sim$A, additive, "learn_psi", lambda = 0, exposure = data_sim$exposure, max_itr = 300)
+# y <- claims[3]
+# pi <- 0.7
+# mu <- mu[3]
+# phi <- exp(1)
+# z_density <- gamma_density
 # 
-# 
-# beta_est <- c(0,0,0) #out_zip$beta1    # beta (d-dimensional)
-# pi_est <- 0.5#out_zip$prop           # pi (scalar)
-# psi_est <- rep(0, nr_regions)# out_zip$psi     # psi (vector of length nr_regions)
-# a_est <- rep(0, nr_regions*(nr_regions + 1)/2)# out_zip$a
-# 
-# # Initialize controls
-# optimizer_beta <- "gd"
-# optimizer_psi <- "gd"
-# optimizer_a <- "gd"
-# optimizer_pi <- "gd"
-# optimizer_beta_phi <- "gd"
-# sgd <- FALSE
-# batch_size <- 100
-# 
-# 
-# 
-# controls <- list()
-# controls$beta <- get_controls(optimizer_beta, 0.001, d, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-# controls$psi <- get_controls(optimizer_psi, 0.1, nr_regions, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-# controls$pi <- get_controls(optimizer_pi, 0.0001, 1, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-# controls$beta_phi <- get_controls(optimizer_beta_phi, 0.001, 1, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-# controls$a <- get_controls(optimizer_a, 0.001, nr_edges, beta1 = beta1_mom, beta2 = beta2_mom, epsilon = epsilon, iter = 1)
-# 
-# 
-# 
-# 
-# 
-# 
-# 
-# t1 <- Sys.time()
-# 
-# 
-# N <- length(claims)
-# # (Assuming get_spatial_aggregate() and get_mu() are defined in utils.R)
-# cat("\nStarting updates for beta, pi (Adam) and psi (Adagrad):\n")
-# for (iter in 1:n_iter) {
-#   t1 <- Sys.time()
-#   if(model_type == "learn_graph"){
-#     A <- get_W_from_array(a_est, nr_regions)
-#     psi <- NA
-#   }else if(model_type == "learn_psi"){
-#     a_est <- 1
-#   }
-#   
-#   
-#   # If using SGD, sample a mini-batch
-#   if (sgd) {
-#     idx <- c()
-#     for(i in 1:nr_regions){
-#       idx <- c(idx, sample(which(locs == i), batch_size, replace = FALSE))
-#     }
-#     claims_batch   <- claims[idx]
-#     X_batch        <- X[idx, , drop = FALSE]
-#     exposure_batch <- exposure[idx]
-#     locs_batch     <- locs[idx]
-#     years_batch <- years[idx]
-#   } else {
-#     idx <- 1:N
-#     claims_batch   <- claims
-#     X_batch        <- X
-#     exposure_batch <- exposure
-#     locs_batch     <- locs
-#     years_batch <- years
-#   }
-#   
-#   
-#   phi <- exp(beta_phi)
-# 
-#   # Compute spatial aggregate effects and baseline nu
-#   se <- get_spatial_aggregate(locs_batch, A, psi_est, agg_claims, years_batch, model_type)
-#   nu <- as.numeric(exp(X_batch %*% beta_est))  # baseline mu from covariates
-#   
-#   # Get full mu by combining covariate effects (nu), spatial effects, and exposure
-#   mu <- get_mu(nu, se$spatial_effect, exposure_batch, additive)
-#   
-#   mu_batch <- mu[idx]
-#   nu_batch <- nu[idx]
-#   
-#   # E-steps
-#   # Compute expected derivative with respect to mu
-#   grad_mu <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-#                         h_func = h_mu_func, likelihood_func = zip_likelihood_func, method  = "MCEM", S = 10, n_nodes = 10, rzdensity = rzdensity)
-#   grad_pi <- expected_pi_grad(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, TRUE)
-# 
-#   
-#   if(mixing == "gamma"){
-#     w1 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-#                      h_func = function(z, y, pi, mu) identity(z), likelihood_func = zip_likelihood_func,  method  = "MCEM", S = 10, n_nodes = 10, rzdensity = rzdensity)
-#     w2 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-#                      h_func = function(z, y, pi, mu) log(z), likelihood_func = zip_likelihood_func, method  = "MCEM", S = 10, n_nodes = 10, rzdensity = rzdensity)
-#   }else if(mixing == "ig"){
-#     w1 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-#                      h_func = function(z, y, pi, mu) identity(z), likelihood_func = zip_likelihood_func, method  = "MCEM", S = 10, n_nodes = 10, rzdensity = rzdensity)
-#     w3 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-#                      h_func = function(z, y, pi, mu) 1/z, likelihood_func = zip_likelihood_func, method  = "MCEM", S = 10, n_nodes = 10, rzdensity = rzdensity)
-#   } else if(mixing == "ln"){
-#     w4 <- expected_h(y = claims_batch, beta = beta_est, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-#                      h_func = function(z, y, pi, mu) log(z)^2, likelihood_func = zip_likelihood_func, method  = "MCEM", S = 10, n_nodes = 10, rzdensity = rzdensity)
-#   }
-#   
-# 
-#   
-#   
-#   # Compute gradient for beta via chain rule: sum_i (grad_mu_i * nu_i * x_i)
-#   grad_beta_total <- get_grad_beta(additive, grad_mu, nu_batch, exposure_batch, X_batch, se$spatial_effect[idx], locs_batch)
-#   
-#   # Compute psi/a gradient
-#   if(model_type == "learn_graph"){
-#     grad_a_total <- get_grad_a(additive, grad_mu, agg_claims, years_batch, locs_batch, exposure_batch, nu_batch, lambda)
-#   }else if (model_type == "learn_psi"){
-#     grad_psi_total <- get_grad_psi(additive,grad_mu, se$agg_effect[idx], nu_batch, exposure_batch, locs_batch)
-#   }
-#   
-#   # Compute gradient for pi (scalar)
-#   grad_pi_total <- get_grad_pi()
-#   
-#   # phi grad
-#   grad_beta_phi_total <- get_grad_beta_phi(phi, w1, w2, w3, w4)
-#   
-#   # scale gradient for sgd
-#   if(sgd){
-#     grad_beta_total <- grad_beta_total* (N / batch_size)  
-#     if(model_type == "learn_graph"){
-#       grad_a_total <- grad_a_total* (N / batch_size)  
-#     }else if (model_type == "learn_psi"){
-#       grad_psi_total <- grad_psi_total* (N / batch_size)  
-#     }
-#     grad_pi_total <- grad_pi_total* (N / batch_size)  
-#     grad_beta_phi_total <- grad_beta_phi_total* (N / batch_size)  
-#   }
-#   
-#   
-#   # update beta
-#   beta_out <- update_gradient(optimizer_beta, beta_est, grad_beta_total, controls$beta)
-#   beta_est <- beta_out$param
-#   controls$beta <- beta_out$controls
-#   
-#   # update psi/a
-#   if(model_type == "learn_graph"){
-#     a_out <- update_gradient(optimizer_a, a_est, grad_a_total, controls$a)
-#     a_est <- a_out$param
-#     controls$a <- a_out$controls
-#     a_est <- pmax(a_est, 1e-6)
-#   }else if(model_type == "learn_psi"){
-#     psi_out <- update_gradient(optimizer_psi, psi_est, grad_psi_total, controls$psi)
-#     psi_est <- psi_out$param
-#     controls$psi <- psi_out$controls
-#     psi_est <- pmax(psi_est, 1e-6)
-#   }
-# 
-#   
-#   # update pi
-#   pi_out <- update_gradient(optimizer_pi, pi_est, grad_pi_total, controls$pi)
-#   pi_est <- pi_out$param
-#   controls$pi <- pi_out$controls
-#   pi_est <- pmin(pmax(pi_est, 1e-6), 1-1e-6)
-#   
-#   
-#   # update phi
-#   beta_phi_out <- update_gradient(optimizer_beta_phi, beta_phi, grad_beta_phi_total, controls$beta_phi)
-#   beta_phi <- beta_phi_out$param
-#   controls$beta_phi <- beta_phi_out$controls
-#   
-#   
-#   
-#   ##### Check convergence
-#   # stop if expected likelihood has stopped decreasing
-#   se <- get_spatial_aggregate(locs, A, psi_est, agg_claims, years, model_type)
-#   nu <- as.numeric(exp(X %*% beta_est))  # baseline mu from covariates
-#   
-#   # Get full mu by combining covariate effects (nu), spatial effects, and exposure
-#   mu <- get_mu(nu, se$spatial_effect, exposure, additive)
-#   log_lik <- sum(log(log_lik_function(claims,  exp(beta_phi), pi_est,  mu,  z_density)))
-#   print(paste0("log-likelihood value  ",sum(log_lik)))
-#   
-#   
-# 
-#   
-#   if(model_type == "learn_graph"){
-#     cat(sprintf("Iteration %d: beta = [%s], pi = %f, a = [%s], beta_phi = %f\n,",
-#                 iter,
-#                 paste(round(beta_est, 4), collapse = ", "),
-#                 pi_est,
-#                 paste(round(a_est, 4), collapse = ", "),
-#                 beta_phi))
-#   }else if (model_type == "learn_psi"){
-#     cat(sprintf("Iteration %d: beta = [%s], pi = %f, psi = [%s], beta_phi = %f\n,",
-#                 iter,
-#                 paste(round(beta_est, 4), collapse = ", "),
-#                 pi_est,
-#                 paste(round(psi_est, 4), collapse = ", "),
-#                 beta_phi))
-#   }
-#   
-#   t2 <- Sys.time()
-#   print(paste0("Time  ",t2-t1))
-# 
+# # f(y|z) for y > 0 under the zip  model:
+# f_y_given_z <- function(z) {
+#   zip_likelihood_func(z, y, pi, mu)
 # }
 # 
+# # Numerator: integrate h(z)*f(y|z)*f(z) over z
+# numerator_integrand <- function(z) {
+#   f_y_given_z(z) * z_density(z, phi)
+# }
+# 
+# # Get Gauss-Legendre nodes and weights on [-1,1]
+# quad <- statmod::gauss.quad(30, kind = "legendre")
+# # Transform nodes and weights to [0,1]
+# t_nodes <- (quad$nodes + 1) / 2
+# t_weights <- quad$weights / 2
+# 
+# # Transformation: z = t/(1-t), dz/dt = 1/(1-t)^2.
+# z_vals   <- t_nodes / (1 - t_nodes)
+# jacobian <- 1 / (1 - t_nodes)^2
+# 
+# integrand_num_vals   <- numeric(length(z_vals))
+# integrand_denom_vals <- numeric(length(z_vals))
+# 
+# for (i in seq_along(z_vals)) {
+#   z <- z_vals[i]
+#   lik   <- f_y_given_z(z)
+#   integrand_num_vals[i]   <- lik * z_density(z, phi) * jacobian[i]
+# }
+# num_quad   <- sum(t_weights * integrand_num_vals)
 
+# out$a
+# 
+# 
+# 
+# out_zip <- zip(claims, X, locs, years,  agg_claims, 
+#                A, additive, "learn_psi", 10000000 = lambda, exposure = exposure, max_itr = 300)
