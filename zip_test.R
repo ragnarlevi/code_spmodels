@@ -77,7 +77,7 @@ for(t in ts){
   
   A_est_ig[[as.character(t)]] <- out_ig$a
   A_ig_info[[as.character(t)]] <- evaluate_matrix_recovery(sim$A, get_W_from_array(out_ig$a, 10))
-  beta_est_ig[[as.character(t)]] <- out_ig$beta1
+  beta_est_ig[[as.character(t)]] <- out_ig$beta
   H_ig_p[[as.character(t)]] <- out_ig$Hessian
   
   
@@ -91,7 +91,7 @@ for(t in ts){
 
   A_est_ig_lfbgs[[as.character(t)]] <- out_ig_lfbgs$a
   A_ig_info_lfbgs[[as.character(t)]] <- evaluate_matrix_recovery(sim$A, get_W_from_array(out_ig_lfbgs$a, 10))
-  beta_est_ig_lfbgs[[as.character(t)]] <- out_ig_lfbgs$beta1
+  beta_est_ig_lfbgs[[as.character(t)]] <- out_ig_lfbgs$beta
   H_ig_p_lfbgs[[as.character(t)]] <- out_ig_lfbgs$Hessian
   
   
@@ -104,49 +104,83 @@ for(t in ts){
 
 
 # load("Poisson_ln_per_t.RData")
-# 
-# 
-# a_none_error <- lapply(A_est_p, function(x, y){sum(abs(x-y))}, y = sim$A[upper.tri(sim$A, T)])
-# a_ig_error <- lapply(A_est_ig, function(x, y){sum(abs(x-y))}, y =  sim$A[upper.tri(sim$A, T)])
-# 
-# 
-# b_none_error <- lapply(beta_est_p, function(x, y){sum(abs(x-y))}, y = sim$beta1)
-# b_ig_error <- lapply(beta_est_ig, function(x, y){sum(abs(x-y))}, y = sim$beta1)
-# 
-# 
-# 
-# library(tidyverse)
-# ggplot(data.frame(t = ts,
-#                   poissson_error = unlist(a_none_error),
-#                   ig_error = unlist(a_ig_error)
-# )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "LN"))
-# 
-# 
-# 
-# ggplot(data.frame(t = ts,
-#                   poissson_error = unlist(b_none_error),
-#                   ig_error = unlist(b_ig_error)
-# )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "LN"))
-# 
-# 
-# A_ig_info
-# 
-# 
-# 
-# ggplot(data.frame(t = ts,
-#                   poissson_error = unlist(lapply(A_p_info, function(x){x$f1_score})),
-#                   ig_error = unlist(lapply(A_ig_info, function(x){x$f1_score}))
-# )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "LN"))
-# 
+a_none_error <- lapply(A_est_p, function(x, y){sum(abs(x-y))}, y = sim$A[upper.tri(sim$A, T)])
+a_ig_error <- lapply(A_est_ig, function(x, y){sum(abs(x-y))}, y =  sim$A[upper.tri(sim$A, T)])
+a_ig_bfgs_error <- lapply(A_est_ig_lfbgs, function(x, y){sum(abs(x-y))}, y =  sim$A[upper.tri(sim$A, T)])
+
+
+b_none_error <- lapply(beta_est_p, function(x, y){sum(abs(x-y))}, y = sim$beta1)
+b_ig_error <- lapply(beta_est_ig, function(x, y){sum(abs(x-y))}, y = sim$beta1)
+b_ig_bfgs_error <- lapply(beta_est_ig_lfbgs, function(x, y){sum(abs(x-y))}, y = sim$beta1)
+
+se_error_ig <- do.call(rbind,
+                       mapply(
+                         function(x, idx) {
+                           # idx is a single integer (1, 2, 3, …)
+                           mat <- x - 0.5 * diag(nrow(x)) * (idx == 1)
+                           diag( solve(mat) )
+                         },
+                         H_ig_p,
+                         seq_along(H_p),
+                         SIMPLIFY = FALSE
+                       )
+)
+
+se_error_p <- do.call(rbind,
+                      mapply(
+                        function(x, idx) {
+                          # idx is a single integer (1, 2, 3, …)
+                          mat <- x + 0.5 * diag(nrow(x)) * (idx == 1)
+                          diag( solve(mat) )
+                        },
+                        H_p,
+                        seq_along(H_p),
+                        SIMPLIFY = FALSE
+                      )
+)
+
+ggplot() + 
+  geom_line(aes( x = ts[1:7], y = se_error_p[,1], color = "Poisson"))+
+  geom_line(aes( x = ts[1:7], y = se_error_ig[,1], color = "LN"))
 
 
 
+
+est <- sapply(beta_est_ig, function(x) x[1])
+se_err <- se_error_p[,1]
+ggplot() + geom_line(aes( x = log( ts[1:7]), y = est)) +
+  geom_ribbon(aes(x = log( ts[1:7]), ymin = est - 2*se_err,  ymax = est + 2*se_err ), alpha = 0.5)
+
+
+est <- sapply(A_est_p, function(x) x[2])
+se_err <- se_error_p[,3+2]
+ggplot() + geom_line(aes( x = log(ts), y = est)) +
+  geom_ribbon(aes(x = log(ts), ymin = est - 2*se_err,  ymax = est + 2*se_err ), alpha = 0.5)
+
+
+# 
+# 
+# 
+
+ggplot(data.frame(t = ts[1:6],
+                  poissson_error = unlist(a_none_error)[1:6],
+                  ig_error = unlist(a_ig_error)[1:6],
+                  bfgs_error = unlist(a_ig_bfgs_error)
+)) +
+  geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
+  geom_line(aes(x = t, y = ig_error, color = "LN"))+
+  geom_line(aes(x = t, y = bfgs_error, color = "LN BFGS"))
+# 
+# 
+# 
+ggplot(data.frame(t = ts,
+                  poissson_error = unlist(b_none_error),
+                  ig_error = unlist(b_ig_error),
+                  ig_known_error = unlist(b_ig_known_error)
+)) +
+  geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
+  geom_line(aes(x = t, y = ig_error, color = "LN"))+
+  geom_line(aes(x = t, y = ig_known_error, color = "LN, A known"))
 
 
 

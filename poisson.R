@@ -27,6 +27,14 @@ Q_P <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta,
       A <- get_W_from_array(a, p)
       psi <- NA
     }    
+    
+    if(a_known){
+      beta1 <- param[2:length(param)]
+      a <- 0
+    }
+    
+    
+    
   }else{
     if(model_type == "ordinary"){
       beta1 <- param[1:(ncol(X_mat)+0)]
@@ -40,13 +48,18 @@ Q_P <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta,
       A <- get_W_from_array(a, p)
       psi <- NA
     }
+    
+    if(a_known){
+      beta1 <- param
+      a <- 0
+    }
+    
+    
+    
   }
 
   
-  if(a_known){
-    beta1 <- param
-    a <- 0
-  }
+
   
   se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
   nu <- as.numeric(exp(X_mat %*% beta1))
@@ -84,6 +97,14 @@ Q_P_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, years, e
       A <- get_W_from_array(a, p)
       psi <- NA
     }    
+    
+    
+    if(a_known){
+      beta1 <- param[2:length(param)]
+      a <- 0
+    }
+    
+    
   }else{
     if(model_type == "ordinary"){
       beta1 <- param[1:(ncol(X_mat)+0)]
@@ -97,12 +118,15 @@ Q_P_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, years, e
       A <- get_W_from_array(a, p)
       psi <- NA
     }
+    
+    if(a_known){
+      beta1 <- param
+      a <- 0
+    }
+    
   }
   
-  if(a_known){
-    beta1 <- param
-    a <- 0
-  }
+
   
   se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
   nu <- exp(X_mat %*% beta1)
@@ -521,7 +545,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
 
 
 
- pois_likelihood_func <- function(z, y, pi, mu){
+ pois_likelihood_func <- function(z, y, pi, mu, phi){
    dpois(y, lambda = z*mu)
  }
 
@@ -531,7 +555,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
    
    # f(y|z) for y > 0 under the zip  model:
    f_y_given_z <- function(z) {
-     pois_likelihood_func(z, y, pi, mu)
+     pois_likelihood_func(z, y, pi, mu, phi)
    }
    
    # Numerator: integrate h(z)*f(y|z)*f(z) over z
@@ -577,6 +601,8 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
                           mixing_var = "gamma", z= "", verbose = 0, sgd = FALSE, batch_size = 500,
                           a_known = FALSE){
   
+   
+   
   
   if(model_type != "learn_graph"){
     a_known <- FALSE
@@ -624,12 +650,14 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     beta20 <- 1
     z_density <- gamma_density
     rzdensity <- rgamma_density
+    deriv_log_density <- deriv_log_gamma_density
     Q_beta_2 <- Q_PG_beta_2
     Q_beta_2_deriv <- Q_PG_beta_2_deriv
   }else if(mixing_var == "ig"){
     beta20 <- 0
     z_density <- ig_density
     rzdensity <- rig_density
+    deriv_log_density <- deriv_log_ig_density
     Q_beta_2 <- Q_PIG_beta_2
     Q_beta_2_deriv <- Q_PIG_beta_2_deriv
   }else if(mixing_var == "ln"){
@@ -637,20 +665,20 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     phi <- exp(beta20)
     z_density <- ln_density
     rzdensity <- rln_density
+    deriv_log_density <- deriv_log_ln_density
     Q_beta_2 <- Q_PLN_beta_2
     Q_beta_2_deriv <- Q_PLN_beta_2_deriv
   }else{
     stop("mixing type not known")
   }
-  theta0 <- c(beta20,theta0)
-
+  
 
   if(a_known){
     theta0 <- c(beta1)
     a <- A[upper.tri(A, diag = TRUE)]
   }
   
-  
+  theta0 <- c(beta20,theta0)  
   ## Loop starts ##
   
   log_lik <- -Inf
@@ -708,11 +736,11 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     }else if(mixing_var == "ln"){
       
       eother <- expected_h(y = claims_batch, phi = phi, pi = NA, mu = mu_batch, z_density = z_density, 
-                       h_func = function(z, y, pi, mu) log(z)^2, likelihood_func = pois_likelihood_func, 
+                       h_func = function(z, y, pi, mu, phi) log(z)^2, likelihood_func = pois_likelihood_func, 
                        method  = "GaussLegendre")
       
       etheta <- expected_h(y = claims_batch, phi = phi, pi = NA, mu = mu_batch, z_density = z_density, 
-                          h_func = function(z, y, pi, mu) z, likelihood_func = pois_likelihood_func, 
+                          h_func = function(z, y, pi, mu, phi) z, likelihood_func = pois_likelihood_func, 
                           method  = "GaussLegendre")
 
     }
@@ -780,7 +808,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
    
     mu_old <- mu
     # stop if expected likelihood has stopped decreasing
-    se <- get_spatial_aggregate(locs, A, psi_est, agg_claims, years, model_type)
+    se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
     nu <- as.numeric(exp(X %*% beta1))  # baseline mu from covariates
     
     # Get full mu by combining covariate effects (nu), spatial effects, and exposure
@@ -800,7 +828,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     
     if(iter >1){
       log_lik_old <- log_lik
-      log_lik <- sum(log(zpois_log_lik_function0(claims,  exp(beta2), 0, mu,  z_density)))
+      log_lik <- sum(log(zpois_log_lik_function(claims,  exp(beta2), 0, mu,  z_density)))
       if(model_type == "learn_graph"){
         log_lik <- log_lik - lambda*sum(a)
       }
@@ -845,7 +873,8 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   
   # Finalize 
   # Find Hessian
-  
+  y <- claims
+  nr_regions <- p
 
   # Find variance
   if(mixing_var == "gamma"){
@@ -857,17 +886,18 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   }else if(mixing_var == "ln"){
     
     eother <- expected_h(y = claims_batch, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                         h_func = function(z, y, pi, mu) log(z)^2, likelihood_func = pois_likelihood_func, 
+                         h_func = function(z, y, pi, mu, phi) log(z)^2, likelihood_func = pois_likelihood_func, 
                          method  = "GaussLegendre")
     
     etheta <- expected_h(y = claims_batch, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                         h_func = function(z, y, pi, mu) z, likelihood_func = pois_likelihood_func, 
+                         h_func = function(z, y, pi, mu, phi) z, likelihood_func = pois_likelihood_func, 
                          method  = "GaussLegendre")
   }
   
   
   
-  H_theta <- optimHess(par = theta,
+  # Hessian part
+  Hessian <- optimHess(par = theta,
                        fn = Q_P,
                        gr = Q_P_deriv,
                        locs = locs,
@@ -888,171 +918,148 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
                        mixing = TRUE,
                        scaling_factor = scaling_factor,
                        a_known = a_known)
+
+  
+  # Variance
+
+  grad_mu_sq <- expected_h(y = y, phi = phi, pi = NA, mu = mu, z_density = z_density, 
+                                       h_func = function(z, y, pi, mu, phi) (y/mu-z)^2, likelihood_func = pois_likelihood_func, special_case = FALSE, special_fun = 0,
+                                       mu_old = mu, phi_old = phi, method = "integration")
+  
+  grad_phi_sq <- expected_h(y = y, phi = phi, pi = NA, mu = mu, z_density = z_density, 
+                                        h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi)^2, likelihood_func = pois_likelihood_func, special_case = FALSE, special_fun = 0,
+                                        mu_old = mu, phi_old = phi, method = "integration")
+  
+  
+  grad_mu_sq <- expected_h(y = y, phi = phi, pi = NA, mu = mu, z_density = z_density, 
+                                       h_func = function(z, y, pi, mu, phi) (y/mu-z)^2, likelihood_func = pois_likelihood_func, special_case = FALSE, special_fun = 0,
+                                       mu_old = mu, phi_old = phi, method = "integration")
+  
+  grad_mu_phi <- expected_h(y = y, phi = phi, pi = NA, mu = mu, z_density = z_density, 
+                                        h_func = function(z, y, pi, mu, phi) (y/mu-z)* deriv_log_density(z, phi), likelihood_func = pois_likelihood_func, special_case = FALSE, special_fun = 0,
+                                        mu_old = mu, phi_old = phi, method = "integration")
   
   
   
-  # Create block diagonal matrix manually
-  Hessian <- H_theta
   
   
+  if(a_known){
+    W11 <- matrix(0, nrow = ncol(X)+1, ncol = ncol(X)+1)
+  }else if(model_type == "learn_graph"){
+    W11 <- matrix(0, nrow = ncol(X)+1 + length(a), ncol = ncol(X)+1+ length(a))
+  }else if(model_type == "learn_psi"){
+    W11 <- matrix(0, nrow = ncol(X)+1 + length(psi), ncol = ncol(X)+1+ length(psi))
+  }else{
+    W11 <- matrix(0, nrow = ncol(X)+1, ncol = ncol(X)+1)
+  }
   
-  
-  e_x_2 <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-             h_func = function(z, y, pi, mu) (y/mu-z)^2, likelihood_func = pois_likelihood_func, 
-             method  = "GaussLegendre")
-  
-  
-  if(mixing_var == "gamma"){
-    e_x_2_phi <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu) (phi^2)*(log(phi) + 1 - digamma(phi) + log(z) - z)^2, likelihood_func = pois_likelihood_func, 
-                            method  = "GaussLegendre")
-    e_x_1_phi <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu) phi*(log(phi) + 1 - digamma(phi) + log(z) - z), likelihood_func = pois_likelihood_func, 
-                            method  = "GaussLegendre")
+  for(i in 1:nrow(X)){
     
-  }else if(mixing_var == "ig"){
-    e_x_2_phi <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu) (phi^2)*(1/phi + 2*phi - phi/z - phi*z)^2, likelihood_func = pois_likelihood_func, 
-                            method  = "GaussLegendre")
-    e_x_1_phi <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu) phi*(1/phi + 2*phi - phi/z - phi*z), likelihood_func = pois_likelihood_func, 
-                            method  = "GaussLegendre")
-  }else if(mixing_var == "ln"){
+    g1 <- get_grad_beta(additive, 1, nu[i], exposure[i], X[i, , drop = FALSE], se$spatial_effect[i], locs[i])
     
-    e_x_2_phi <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu) (phi^2)*(-1/phi + log(z)^2/(phi ^3) - 2*phi/8)^2, likelihood_func = pois_likelihood_func, 
-                            method  = "GaussLegendre")
+    if(a_known){
+      g22 <- c()
+    }else if(model_type == "learn_graph"){
+      g22 <- get_grad_a_2(additive, 1, agg_claims, years[i],locs[i], exposure[i], nu[i], lambda, nr_regions)
+    }else if(model_type == "learn_psi"){
+      g22 <- get_grad_psi_2(additive, 1, se$agg_effect[i], nu[i], exposure[i], locs[i], nr_regions)
+    }else{
+      g22 <- c()
+    }
     
-    e_x_1_phi <- expected_h(y = claims, phi = phi, pi = NA, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu) phi*(-1/phi + log(z)^2/(phi ^3) - 2*phi/8), likelihood_func = pois_likelihood_func, 
-                            method  = "GaussLegendre")
+    
+    
+    u1 <- grad_mu_sq[i] * outer(c(g1, g22), c(g1, g22))
+    u2 <- grad_phi_sq[i]
+    u3 <- grad_mu_phi[i] * c(g1, g22)
+    
+    W11[1,1] <-  W11[1,1] + u2
+    W11[1,2:ncol(W11)] <- W11[1,2:ncol(W11)] + u3
+    W11[2:ncol(W11), 1] <-  W11[2:ncol(W11), 1] + u3
+    W11[2:ncol(W11), 2:ncol(W11)] <- W11[2:ncol(W11), 2:ncol(W11)] + u1
     
   }
   
   
+  grad_mu <- expected_h(y = y, phi = phi, pi = NA, mu = mu, z_density = z_density, 
+                                    h_func = function(z, y, pi, mu, phi) (y/mu-z), likelihood_func = pois_likelihood_func,
+                                    special_case = FALSE, special_fun = 0, method = "integration")
+  
+  grad_phi <- expected_h(y = y, phi = phi, pi = NA, mu = mu, z_density = z_density, 
+                                     h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi),
+                                     likelihood_func = pois_likelihood_func, special_case = FALSE, special_fun = 0, method = "integration")
   
   
-  
-  
-  ex2 <- matrix(0, nrow = length(theta), ncol = length(theta))
-  ex1 <- matrix(0, nrow = length(theta), ncol = length(theta))
-  for(i in 1:length(locs)){
+  if(a_known){
+    W22 <- matrix(0, nrow = ncol(X)+1, ncol = ncol(X)+1)
+  }else if(model_type == "learn_graph"){
+    W22 <- matrix(0, nrow = ncol(X)+1 + length(a), ncol = ncol(X)+1+ length(a))
+  }else if(model_type == "learn_psi"){
+    W22 <- matrix(0, nrow = ncol(X)+1 + length(psi), ncol = ncol(X)+1+ length(psi))
+  }else{
+    W22 <- matrix(0, nrow = ncol(X)+1, ncol = ncol(X)+1)
+  }
+  for(i in 1:nrow(X)){
     
-    grads_1 <- Q_P_deriv(param = theta,
-                         locs = locs[i],
-                         claims = claims[i], 
-                         exposure = exposure[i], 
-                         X_mat = X[i, , drop = FALSE], 
-                         agg_claims = agg_claims, 
-                         years = years[i],
-                         etheta = etheta[i],
-                         A = A,
-                         additive = additive,
-                         model_type = model_type,
-                         lambda = 0,
-                         p = p,
-                         eother = eother, 
-                         Q_beta_2 = Q_beta_2, 
-                         Q_beta_2_deriv = Q_beta_2_deriv,
-                         mixing = TRUE,
-                         scaling_factor = scaling_factor,
-                         a_known = a_known)
+    g1 <- get_grad_beta(additive, 1, nu[i], exposure[i], X[i, , drop = FALSE], se$spatial_effect[i], locs[i])
     
-    ex1 <- ex1 + outer(grads_1, grads_1)
+    if(a_known){
+      g22 <- c()
+    }else if(model_type == "learn_graph"){
+      g22 <- get_grad_a_2(additive, 1, agg_claims, years[i],locs[i], exposure[i], nu[i], 0, nr_regions)
+    }else if(model_type == "learn_psi"){
+      g22 <- get_grad_psi_2(additive, 1, se$agg_effect[i], nu[i], exposure[i], locs[i], nr_regions)
+    }else{
+      g22 <- c()
+    }
+    u1 <- grad_mu[i]^2 * outer(c(g1, g22), c(g1, g22))
+    u2 <- (grad_phi[i])^2
+    u3 <- grad_mu[i]*grad_phi[i] * c(g1, g22)
     
-    grads_2 <- Q_P_deriv2(param = theta,
-                          locs = locs[i],
-                          claims = claims[i], 
-                          exposure = exposure[i], 
-                          X_mat = X[i, , drop = FALSE], 
-                          agg_claims = agg_claims, 
-                          years = years[i],
-                          etheta = 1,
-                          A = A,
-                          additive = additive,
-                          model_type = model_type,
-                          lambda = 0,
-                          p = p,
-                          scaling_factor = scaling_factor,
-                          a_known = a_known)
+    W22[1,1] <-  W22[1,1] + u2
+    W22[1,2:ncol(W22)] <- W22[1,2:ncol(W22)] + u3
+    W22[2:ncol(W22), 1] <-  W22[2:ncol(W22), 1] + u3
+    W22[2:ncol(W22), 2:ncol(W22)] <- W22[2:ncol(W22), 2:ncol(W22)] + u1
     
-    tmp <- outer(grads_2, grads_2) 
-    tmp[1,1] <- e_x_2_phi[i]*tmp[1,1]
-    tmp[1,2:nrow(tmp)] <- tmp[1,2:nrow(tmp)]*e_x_1_phi[i]*grads_1[2:nrow(tmp)]
-    tmp[2:nrow(tmp), 1] <- tmp[2:nrow(tmp), 1] *e_x_1_phi[i]*grads_1[2:nrow(tmp)]
-    tmp[2:nrow(tmp), 2:nrow(tmp)] <- tmp[2:nrow(tmp), 2:nrow(tmp)]*e_x_2[i]
-    
-    
-    ex2 <- ex2 + tmp
-    
-
   }
   
-  
 
   
+  var_loglik <- W11-W22
   
-  
-  # Create block diagonal matrix manually
-  var_der_log_lik <- ex2 - ex1
-  
+
 
   
   return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], beta2 = beta2 , Hessian = Hessian, mu = mu, 
-              optim_obj = out, model_type = model_type, log_lik = log_lik, var_der_log_lik = var_der_log_lik, ex2 = ex2, ex1 = ex1))
+              optim_obj = out, model_type = model_type, log_lik = log_lik, var_loglik = var_loglik))
   
   
 }
 
-
-# library(numDeriv)
-# derivs <- list()
-# Hs <- list()
-# for( i in 1:100){
-#   z_samples <- rln_density(length(mu), exp(out_poisson$beta2))
-#   deriv <- Q_P_deriv(c(out_poisson$beta1, out_poisson$a), sim$locs, sim$claims, sim$exposure, sim$X, sim$agg_claims, sim$years, z_samples, 
-#             get_W_from_array(out_poisson$a, 5), TRUE, "learn_graph", 0, 5, scaling_factor = 1, a_known = FALSE) 
-#   
-#   H <- pracma::hessian(f = Q_P, 
-#                x = c(out_poisson$beta1, out_poisson$a), 
-#                locs = sim$locs, claims = sim$claims, exposure = sim$exposure, X_mat = sim$X, 
-#                agg_claims = sim$agg_claims, years = sim$years,  
-#                etheta = z_samples, A = get_W_from_array(out_poisson$a, 5), 
-#                additive = TRUE, 
-#                model_type = "learn_graph", 
-#                lambda = 0, 
-#                p = 5, 
-#                scaling_factor = 1, 
-#                a_known = FALSE
-#                
-#                )
-#   
-#   derivs[[i]] <- deriv
-#   Hs[[i]] <- H
-#   
-#   
-#   
-# }
 
 
 
 
 ##### Test some data set ###########
 
-sim <- simulate_claims(20, 100, "graph", FALSE, mixing = "ln", model_type = "poisson", exposure_lambda = 0)
+# sim <- simulate_claims(20, 20, "graph", FALSE, mixing = "gamma", model_type = "poisson", exposure_lambda = 0)
+# 
+# 
+# 
+# 
+# 
+# out_poisson <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 0,
+#               exposure = sim$exposure, max_itr = 0, mixing_var = "gamma", nr_em = 20,
+#               verbose = 2, sgd = FALSE, batch_size = 100, param_tol = 0, a_known = FALSE)
+# 
+# diag(solve(out_poisson$Hessian - out_poisson$var_loglik))
 
 
-
-
-
-out_poisson <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 0,
-              exposure = sim$exposure, max_itr = 0, mixing_var = "ln", nr_em = 50,
-              verbose = 2, sgd = FALSE, batch_size = 100, param_tol = 0, a_known = FALSE)
-
-
-diag(solve(out_poisson$Hessian  - out_poisson$var_der_log_lik))
-diag(solve(out_poisson$Hessian  - diag(out_poisson$ex2)))
-diag(solve(out_poisson$Hessian  ))
+# 
+# 
+# diag(solve(out_poisson$Hessian  - out_poisson$var_der_log_lik))
+# diag(solve(out_poisson$Hessian  - diag(out_poisson$ex2)))
+# diag(solve(out_poisson$Hessian  ))
 
 # 
 # 
@@ -1069,7 +1076,6 @@ diag(solve(out_poisson$Hessian  ))
 # A_est_p <- list()
 # beta_est_p <- list()
 # 
-# A_est_ig <- list()
 # beta_est_ig <- list()
 # 
 # ts <- c(10, 20, 50, 70, 100, 200, 500, 1000)

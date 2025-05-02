@@ -27,8 +27,11 @@ generateSparseMatrix <- function(nrows, ncols, density, minVal = 0.1, maxVal = 1
 }
 
 
-simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, model_type = "poisson", density = 0.4, exposure_lambda = 0){
-  set.seed(123)
+simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, model_type = "poisson", density = 0.4, exposure_lambda = 0, seed = 123){
+  
+  A1_true <- as.matrix(generateSparseMatrix(area, area, density))
+  
+  set.seed(seed)
   
   # store claim data
   locs <- sample(1:area, n, replace = TRUE)
@@ -51,8 +54,6 @@ simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, 
                   rnorm(n*years, -0.3, sd = 0.1))
   X_mat2 <- as.matrix(rep(1, n*years))
   beta1_true <- c(1, -1, 1)
-  
-  A1_true <- as.matrix(generateSparseMatrix(area, area, density))
   
   
   

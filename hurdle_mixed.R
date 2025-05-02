@@ -584,7 +584,8 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   }
   
   
-  return(list(beta = beta_est, pi = pi_est, a = a_est, psi = psi_est, mu = mu, Hessian = Hessian, log_lik = log_lik ))
+  
+  return(list(beta1 = beta_est, pi = pi_est, a = a_est, psi = psi_est, beta2 = beta_phi_est, mu = mu, Hessian = Hessian, log_lik = log_lik ))
 }
 
 

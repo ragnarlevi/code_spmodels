@@ -21,77 +21,105 @@ source("simulate_data.R")
 ######### Test behaviour with t ############
 ##########
 
-A_est_p <- list()
-A_p_info <- list()
-beta_est_p <- list()
-H_p <- list()
-time_p <- list()
+do_poisson_t <- function(density){
+  
+  A_est_p <- list()
+  A_p_info <- list()
+  beta_est_p <- list()
+  H_p <- list()
+  time_p <- list()
+  
+  A_est_ig <- list()
+  A_ig_info <- list()
+  beta_est_ig <- list()
+  beta2_est_ig <- list()
+  H_ig_p <- list()
+  var_ig_p <- list()
+  time_ig <- list()
+  
+  additive <- FALSE
+  nr_regions <- 10
+  sim <- simulate_claims(100, 5000, spatial_type = "graph",additive =  additive, area = nr_regions, 
+                         model_type = "poisson", mixing = "ln", density = density)
+  A <- sim$A
+  
+  
+  beta_est_known_ig <- list()
+  beta2_est_known_ig <- list()
+  
+  ts <- c(10, 20, 50)#, 100, 300, 500, 1000, 2000
+  
+  for(t in ts){
+    
+    print(t)
+    # subset claims
+    claims <- sim$claims[sim$years <= t]
+    locs <- sim$locs[sim$years <= t]
+    agg_claims <- sim$agg_claims[, 1:t]
+    X <- sim$X[sim$years <= t, ]
+    years <- sim$years[sim$years <= t]
+    exposure <- sim$exposure[sim$years <= t]
+    
+    
+    
+    
+    # Poisson
+    a1 <- Sys.time()
+    out_none <- Poisson(claims, X, locs, years, agg_claims, NA, additive = additive, "learn_graph", 
+                        lambda = 0, exposure = exposure, max_itr = 100)
+    time_p[[as.character(t)]] <-  Sys.time() - a1
+    A_p_info[[as.character(t)]] <- evaluate_matrix_recovery(sim$A, get_W_from_array(out_none$a, 10))
+    
+    A_est_p[[as.character(t)]] <- out_none$a
+    beta_est_p[[as.character(t)]] <- out_none$beta1
+    H_p[[as.character(t)]] <- out_none$optim_obj$hessian
+    
+    # Mixed Poisson
+    a1 <- Sys.time()
+    out_ig <- Poisson_mixed(claims, X, locs, years, agg_claims, A = NA, additive = additive, model_type = "learn_graph", 
+                            lambda = 0, 
+                            exposure = exposure, max_itr = 10, mixing_var = "ln", nr_em = 100, verbose = 2)
+    
+    time_ig[[as.character(t)]] <-  Sys.time() - a1
+    
+    A_est_ig[[as.character(t)]] <- out_ig$a
+    A_ig_info[[as.character(t)]] <- evaluate_matrix_recovery(sim$A, get_W_from_array(out_ig$a, 10))
+    beta_est_ig[[as.character(t)]] <- out_ig$beta1
+    H_ig_p[[as.character(t)]] <- out_ig$Hessian
+    var_ig_p[[as.character(t)]] <- out_ig$var_loglik
+    beta2_est_ig[[as.character(t)]] <- out_ig$beta2
+    
+    
+    # Mixed Poisson known A
+    out_ig_known <- Poisson_mixed(claims, X, locs, years, agg_claims, A = A, additive = additive, model_type = "learn_graph", 
+                                  lambda = 0, 
+                                  exposure = exposure, max_itr = 5, mixing_var = "ln", nr_em = 100, verbose = 2, a_known = TRUE)
+    
+    
+    
+    beta_est_known_ig[[as.character(t)]] <- out_ig_known$beta1
+    beta2_est_known_ig[[as.character(t)]] <- out_ig_known$beta2
+    
 
-A_est_ig <- list()
-A_ig_info <- list()
-beta_est_ig <- list()
-H_ig_p <- list()
-var_ig_p <- list()
-time_ig <- list()
-
-
-
-beta_est_known_ig <- list()
-
-ts <- c(10, 20, 50, 100, 300, 500, 1000, 2000)
-additive <- FALSE
-for(t in ts){
+    save(
+      list = ls(envir = environment()),      # all names in this env
+      file =  paste0("Poisson_ln_per_t",round(density, 2) , ".RData" ),               # where to write
+      envir = environment()                  # whose vars to save
+    )
+    
+  }
   
-  print(t)
-  sim <- simulate_claims(100, t, spatial_type = "graph",additive =  additive, area = 10, model_type = "poisson", mixing = "ln")
-  
-  # Poisson
-  a1 <- Sys.time()
-  out_none <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, NA, additive = additive, "learn_graph", 
-                      lambda = 0, exposure = sim$exposure, max_itr = 100)
-  time_p[[as.character(t)]] <-  Sys.time() - a1
-  A_p_info[[as.character(t)]] <- evaluate_matrix_recovery(sim$A, get_W_from_array(out_none$a, 10))
-  
-  A_est_p[[as.character(t)]] <- out_none$a
-  beta_est_p[[as.character(t)]] <- out_none$beta1
-  H_p[[as.character(t)]] <- out_none$optim_obj$hessian
-
-  # Mixed Poisson
-  a1 <- Sys.time()
-  out_ig <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, A = NA, additive = additive, model_type = "learn_graph", 
-                          lambda = 0, 
-                          exposure = sim$exposure, max_itr = 10, mixing_var = "ln", nr_em = 50, verbose = 2)
-  time_ig[[as.character(t)]] <-  Sys.time() - a1
-  
-  A_est_ig[[as.character(t)]] <- out_ig$a
-  A_ig_info[[as.character(t)]] <- evaluate_matrix_recovery(sim$A, get_W_from_array(out_ig$a, 10))
-  beta_est_ig[[as.character(t)]] <- out_ig$beta1
-  H_ig_p[[as.character(t)]] <- out_ig$Hessian
-  var_ig_p[[as.character(t)]] <- out_ig$var_der_log_lik
-  
-  
-  # Mixed Poisson known A
-  out_ig_known <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, A = sim$A, additive = additive, model_type = "learn_graph", 
-                                lambda = 0, 
-                                exposure = sim$exposure, max_itr = 10, mixing_var = "ln", nr_em = 50, verbose = 2, a_known = TRUE)
-  
-  
-  
-  beta_est_known_ig[[as.character(t)]] <- out_ig_known$beta1
-  
-
-  
-  save.image("Poisson_ln_per_t.RData")
-
 }
 
+do_poisson_t(0.4)
 
 
+diag(solve(H_ig_p[["20"]] - var_ig_p[["20"]]))
 
 
 library(tidyverse)
 # 
-# load("Poisson_ln_per_t.RData")
+# load("Poisson_ln_per_t0.4.RData", , envir = environment())
 # 
 # 
 a_none_error <- lapply(A_est_p, function(x, y){sum(abs(x-y))}, y = sim$A[upper.tri(sim$A, T)])
@@ -108,13 +136,14 @@ b_ig_known_error <- lapply(beta_est_known_ig, function(x, y){sum(abs(x-y))}, y =
 
 se_error_ig <- do.call(rbind,
                        mapply(
-                         function(x, idx) {
+                         function(x, idx, y) {
                            # idx is a single integer (1, 2, 3, …)
-                           mat <- x - 0.5 * diag(nrow(x)) * (idx == 1)
+                           mat <- x-y - 0.5 * diag(nrow(x)) * (idx == 1)
                            diag( solve(mat) )
                          },
                          H_ig_p,
                          seq_along(H_p),
+                         var_ig_p,
                          SIMPLIFY = FALSE
                        )
 )
@@ -140,13 +169,13 @@ ggplot() +
 
 
 est <- sapply(beta_est_ig, function(x) x[1])
-se_err <- se_error_p[,1]
+se_err <- se_error_ig[,2]
 ggplot() + geom_line(aes( x = log(ts), y = est)) +
   geom_ribbon(aes(x = log(ts), ymin = est - 2*se_err,  ymax = est + 2*se_err ), alpha = 0.5)
 
 
-est <- sapply(A_est_p, function(x) x[2])
-se_err <- se_error_p[,3+2]
+est <- sapply(A_est_p, function(x) x[1])
+se_err <- se_error_p[,1 + 3+1]
 ggplot() + geom_line(aes( x = log(ts), y = est)) +
   geom_ribbon(aes(x = log(ts), ymin = est - 2*se_err,  ymax = est + 2*se_err ), alpha = 0.5)
 
@@ -154,6 +183,8 @@ ggplot() + geom_line(aes( x = log(ts), y = est)) +
 # 
 # 
 # 
+
+
 
 ggplot(data.frame(t = ts,
                    poissson_error = unlist(a_none_error),

@@ -10,6 +10,14 @@ rig_density <- function(n, phi) actuar::rinvgauss(n, mean = 1, shape = phi^2)
 rln_density <- function(n, phi) rlnorm(n, meanlog = -phi^2/2, sdlog = phi)
 
 
+deriv_log_gamma_density <- function(z, phi) phi*( log(phi) + 1 - digamma(phi) + log(z) - z )
+deriv_log_ig_density <- function(z, phi) 1 + 2*phi^2 - phi^2*(1/z) - z*phi^2
+deriv_log_ln_density <- function(z, phi) -1 + log(z)^2/phi^2 - phi^2/4
+
+
+
+
+
 
 ####################
 # Functions for E-step
@@ -31,7 +39,7 @@ expected_h_integration <- function(y, phi, pi, mu, z_density, h_func, likelihood
   # print(length(phi_old))
   
   integrand_num <- function(z) {
-    h_val <- h_func(z, y, pi, mu)
+    h_val <- h_func(z, y, pi, mu, phi)
     lik   <- likelihood_func(z, y, pi_old, mu_old)
     val   <- h_val * lik * z_density(z, phi_old)
     val[!is.finite(val)] <- 0
@@ -61,7 +69,7 @@ expected_h_MCEM <- function(y,  phi, pi, mu, h_func, likelihood_func, rzdensity,
   z_samples <- rzdensity(S, phi_old)
   
   # Compute h(z) and likelihood for each sample
-  h_vals   <- sapply(z_samples, function(z) h_func(z, y, pi, mu))
+  h_vals   <- sapply(z_samples, function(z) h_func(z, y, pi, mu, phi))
   lik_vals <- sapply(z_samples, function(z) likelihood_func(z, y, pi_old, mu_old))
   
   num   <- sum(h_vals * lik_vals)
@@ -97,7 +105,7 @@ expected_h_legendre <- function(y, phi, pi, mu, z_density, h_func, likelihood_fu
   
   for (i in seq_along(z_vals)) {
     z <- z_vals[i]
-    h_val <- h_func(z, y, pi, mu)
+    h_val <- h_func(z, y, pi, mu, phi)
     lik   <- likelihood_func(z, y, pi_old, mu_old)
     integrand_num_vals[i]   <- h_val * lik * z_density(z, phi_old) * jacobian[i]
     integrand_denom_vals[i] <- lik * z_density(z, phi_old) * jacobian[i]
@@ -139,7 +147,7 @@ expected_h_hermite <- function(y,  phi, pi, mu, z_density, h_func, likelihood_fu
   
   f_num_vals <- sapply(nodes, function(x) {
     z <- exp(x)
-    h_val <- h_func(z, y, pi, mu)
+    h_val <- h_func(z, y, pi, mu, phi)
     lik <- likelihood_func(z, y, pi_old, mu_old)
     prior <- z_density(z, phi_old)
     return(h_val * lik * prior * exp(x) * exp(x^2))
@@ -250,12 +258,25 @@ get_grad_psi <- function(additive, grad_mu, agg_effect, nu, exposure_batch, locs
   sapply(1:nr_regions, function(r) sum(grad_psi[locs_batch == r]))
 }
 
+get_grad_psi_2 <- function(additive, grad_mu, agg_effect, nu, exposure_batch, locs_batch, nr_regions){
+  if(additive){
+    grad_psi <- grad_mu * exposure_batch * agg_effect
+  }else{
+    grad_psi <- grad_mu * exposure_batch * agg_effect *  nu
+  }
+  g <- rep(0, nr_regions)
+  g[locs_batch] <- grad_psi
+  
+  return(g)
+}
+
+
 get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, lambda, nr_regions){
   
   if(additive){
-    g2 <- grad_mu * t(agg_claims[, years]) * exp(log(exposure))
+    g2 <- grad_mu * t(agg_claims[, years, drop = FALSE]) * exp(log(exposure))
   }else{
-    g2 <-  grad_mu * t(agg_claims[, years]) * exp(log(exposure)) * as.numeric(nu)
+    g2 <-  grad_mu * t(agg_claims[, years, drop = FALSE]) * exp(log(exposure)) * as.numeric(nu)
   }
   
   g2 <- by(g2,locs, FUN=colSums)
@@ -263,6 +284,22 @@ get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, 
   g22 <- G2[upper.tri(G2, diag = T)]
   diag(G2) = 0  # make sure we do not double count the diagonal when we add
   g22 <- g22 + t(G2)[upper.tri(G2, diag = T)] - lambda
+  
+  return(g22)
+}
+
+get_grad_a_2 <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, lambda, nr_regions){
+
+  if(additive){
+    g2 <- 1 * t(agg_claims[, years, drop = FALSE]) * 1
+  }else{
+    g2 <-  1 * t(agg_claims[,  years, drop = FALSE]) * 1 * as.numeric(nu)
+  }
+  G2 <- matrix(0,nrow = nr_regions, ncol = nr_regions, byrow = T)
+  G2[locs,] <- g2
+  g22 <- G2[upper.tri(G2, diag = T)]
+  diag(G2) = 0  # make sure we do not double count the diagonal when we add
+  g22 <- g22 + t(G2)[upper.tri(G2, diag = T)] 
   
   return(g22)
 }
