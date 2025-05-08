@@ -37,7 +37,7 @@ do_zip_t <- function(density, id){
   
   additive <- TRUE
   nr_regions <- 10
-  sim <- simulate_claims(100, 5000, spatial_type = "graph",additive =  additive, area = nr_regions, 
+  sim <- simulate_claims(50, 5000, spatial_type = "graph",additive =  additive, area = nr_regions, 
                          model_type = "zip", mixing = "ig", density = density,  seed = id)
   A <- sim$A
   
@@ -45,7 +45,7 @@ do_zip_t <- function(density, id){
   beta_est_known_ig <- list()
   beta2_est_known_ig <- list()
   
-  ts <- c(10, 20, 50, 100, 300, 500, 1000, 2000)#
+  ts <- c(10, 20, 50, 100, 300, 500, 1000)#
   
   for(t in ts){
     
@@ -81,7 +81,7 @@ do_zip_t <- function(density, id){
                          model_type = "learn_graph", additive = additive, mixing = "ig",  Emethod = "integration",
                          n_iter = 80, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-                         batch_size = 100, param_tol = 1e-5, Q_tol = 1e-9, verbose = 2, do_optim = FALSE, a_known = TRUE)
+                         batch_size = 100, param_tol = 1e-5, Q_tol = 1e-9, verbose = 2, do_optim = FALSE, a_known = FALSE)
     
     
     time_ig[[as.character(t)]] <-  Sys.time() - a1
@@ -95,15 +95,17 @@ do_zip_t <- function(density, id){
     
     
     # Mixed Poisson known A
-    # out_ig_known <- Poisson_mixed(claims, X, locs, years, agg_claims, A = A, additive = additive, model_type = "learn_graph", 
-    #                               lambda = 0, 
-    #                               exposure = exposure, max_itr = 5, mixing_var = "ln", nr_em = 100, verbose = 2, a_known = TRUE)
-    # 
-    # 
-    # 
-    # beta_est_known_ig[[as.character(t)]] <- out_ig_known$beta1
-    # beta2_est_known_ig[[as.character(t)]] <- out_ig_known$beta2
-    # 
+    out_ig_known <- zip_mixed (claims, X, years, locs, agg_claims, A, exposure, 
+                               model_type = "learn_graph", additive = additive, mixing = "ig",  Emethod = "integration",
+                               n_iter = 80, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",
+                               optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
+                               batch_size = 100, param_tol = 1e-5, Q_tol = 1e-9, verbose = 2, do_optim = FALSE, a_known = TRUE)
+
+
+
+    beta_est_known_ig[[as.character(t)]] <- out_ig_known$beta1
+    beta2_est_known_ig[[as.character(t)]] <- out_ig_known$beta2
+
     
     save(
       list = ls(envir = environment()),      # all names in this env
@@ -116,8 +118,12 @@ do_zip_t <- function(density, id){
 }
 
 
-do_zip_t(0.4, 1)
-do_zip_t(0.8, 1)
+for(id in 1:10){
+  print(id)
+  do_zip_t(0.4, id)
+  do_zip_t(0.8, id)
+}
+
 
 
 A_est_p <- list()
