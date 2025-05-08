@@ -10,6 +10,144 @@ source("simulate_data.R")
 ######
 # Objective of Poisson
 
+Q_P_no_phi <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, eother, scaling_factor = 1, a_known = FALSE){
+  
+  etheta <- as.numeric(etheta)
+
+    if(model_type == "ordinary"){
+      beta1 <- param[1:(ncol(X_mat)+0)]
+    }else if(model_type == "learn_psi"){
+      beta1 <- param[1:(ncol(X_mat)+0)]
+      psi <- param[(ncol(X_mat)+1):length(param)]
+      a <- 1
+    }else if(model_type == "learn_graph" & !(a_known)){
+      beta1 <- param[1:(ncol(X_mat)+0)]
+      a <- param[(ncol(X_mat)+1):length(param)]
+      A <- get_W_from_array(a, p)
+      psi <- NA
+    }
+    
+    if(a_known){
+      beta1 <- param
+      a <- 0
+    }
+    
+    
+    
+
+  se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
+  nu <- as.numeric(exp(X_mat %*% beta1))
+  
+  mu <- get_mu(nu, se$spatial_effect, exposure, additive)
+  
+  ll <- sum(claims*log(mu) -mu*etheta) - sum(a*lambda)*(model_type == "learn_graph")  # note minus in z
+  
+
+  return(-ll)
+  
+}
+
+
+# deriviative of the Poisson
+Q_P_deriv_no_phi <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, eother, scaling_factor = 1, a_known = FALSE){
+  
+  
+  etheta <- as.numeric(etheta)
+  
+    if(model_type == "ordinary"){
+      beta1 <- param[1:(ncol(X_mat)+0)]
+    }else if(model_type == "learn_psi"){
+      beta1 <- param[1:(ncol(X_mat)+0)]
+      psi <- param[(ncol(X_mat)+1):length(param)]
+      a <- 1
+    }else if(model_type == "learn_graph" & !(a_known)){
+      beta1 <- param[1:(ncol(X_mat)+0)]
+      a <- param[(ncol(X_mat)+1):length(param)]
+      A <- get_W_from_array(a, p)
+      psi <- NA
+    }
+    
+    if(a_known){
+      beta1 <- param
+      a <- 0
+    }
+    
+
+  se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
+  nu <- exp(X_mat %*% beta1)
+  
+  mu <- get_mu(nu, se$spatial_effect, exposure, additive)
+  
+  
+  der1_logdp <- claims/mu - etheta  # same for all models
+  
+  
+  
+  
+  # add gradients depending on model type
+  if(model_type == "ordinary"){
+    grad <- t( der1_logdp * nu * exp(log(exposure)) ) %*% X_mat
+    
+  }else if(model_type == "learn_psi"){
+    
+    if(additive){
+      #beta
+      g1 <- t( der1_logdp * nu * exp(log(exposure)) ) %*% X_mat
+      # psi
+      g2 <- der1_logdp[,1]*exp(log(exposure)) * se$agg_effect
+      g2 <- tapply(g2,locs,sum)
+    }else{
+      # beta
+      g1 <- t( der1_logdp * nu*(1+se$spatial_effect) * exp(log(exposure)) ) %*% X_mat
+      # psi
+      g2 <- der1_logdp[,1]*exp(log(exposure)) * se$agg_effect * nu
+      g2 <- tapply(g2,locs,sum)
+    }
+    
+    grad <- c(g1, g2)
+    
+    
+  }else if(model_type == "learn_graph"){
+    if(additive){
+      g1 <- t( der1_logdp * nu * exp(log(exposure)) ) %*% X_mat
+      
+      # a
+      g2 <- der1_logdp[,1]*t(agg_claims[, years]) * exp(log(exposure))
+      g2 <- by(g2,locs, FUN=colSums)
+      G2 <- matrix(unlist(g2),nrow = nrow(A), ncol = ncol(A), byrow = T)
+      g22 <- G2[upper.tri(G2, diag = T)]
+      diag(G2) = 0  # make sure we do not double count the diagonal when we add
+      g22 = g22 + t(G2)[upper.tri(G2, diag = T)] - lambda
+    }else{
+      # beta
+      g1 <- t( der1_logdp * nu*(1+se$spatial_effect) * exp(log(exposure)) ) %*% X_mat
+      
+      # A
+      g2 <-  der1_logdp[,1]*t(agg_claims[, years]) * exp(log(exposure)) *as.numeric(nu)
+      
+      g2 <- by(g2,locs, FUN=colSums)
+      G2 <- matrix(unlist(g2),nrow = nrow(A), ncol = ncol(A), byrow = T)
+      g22 <- G2[upper.tri(G2, diag = T)]
+      diag(G2) = 0  # make sure we do not double count the diagonal when we add
+      g22 = g22 + t(G2)[upper.tri(G2, diag = T)] - lambda
+      
+    }
+    
+    if(a_known){
+      g22 <- c()
+    }
+    
+    grad <- c(g1, g22)*scaling_factor
+  }
+  
+  grad <- -grad
+
+  return(grad)
+  
+}
+
+
+
 Q_P <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, eother, Q_beta_2, Q_beta_2_deriv, mixing, scaling_factor = 1, a_known = FALSE){
   
   etheta <- as.numeric(etheta)
@@ -32,8 +170,6 @@ Q_P <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta,
       beta1 <- param[2:length(param)]
       a <- 0
     }
-    
-    
     
   }else{
     if(model_type == "ordinary"){
@@ -599,9 +735,12 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
  Poisson_mixed <- function(claims, X, locs, years, agg_claims, A, additive, model_type, exposure, 
                           lambda = 0, param_tol = 1e-5, Q_tol = 1e-5, nr_em = 100, max_itr = 1000, 
                           mixing_var = "gamma", z= "", verbose = 0, sgd = FALSE, batch_size = 500,
-                          a_known = FALSE){
+                          a_known = FALSE, control_list = list()){
   
    
+   
+  
+  
    
   
   if(model_type != "learn_graph"){
@@ -615,13 +754,17 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   out_poisson <- Poisson(claims, X, locs, years, agg_claims, A, additive, model_type, lambda = lambda, exposure, 
                          nr_em = 100, max_itr = 1000, a_known = a_known)
   beta1 <- out_poisson$beta1
+  print(beta1)
   
+  # Compute the moment‐ratios:
+  res <- claims - out_poisson$mu
+  M2  <- mean((res^2 - out_poisson$mu) / out_poisson$mu^2)   # for gamma & lognormal
+  M3  <- mean((res^2 - out_poisson$mu) / out_poisson$mu^3)   # for inverse Gaussian
   
+
   if(model_type == "learn_graph"){
   a <- out_poisson$a
   A <- get_W_from_array(a, p)
-  lower_a <- rep(1e-4, p*(p+1)/2)
-  upper_a <- rep(0.5, p*(p+1)/2)
   }else if(model_type == "learn_psi"){
     psi <- out_poisson$psi
   }
@@ -629,17 +772,17 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   # add initial param depending on model type
   if(model_type == "ordinary"){
     theta0 <- c(beta1)
-    lower <- c(-20,rep(-20,ncol(X)))
+    lower <- c(rep(-20,ncol(X)))
   }else if(model_type == "learn_psi"){
     theta0 <- c(beta1, psi)
-    lower <- c(-20,rep(-20,ncol(X)), rep(1e-8, p))
+    lower <- c(rep(-20,ncol(X)), rep(1e-8, p))
   }else if(model_type == "learn_graph"){
     theta0 <- c(beta1, a)
-    lower <- c(-20,rep(-20,ncol(X)), rep(1e-8, p*(p+1)/2))
+    lower <- c(rep(-20,ncol(X)), rep(1e-8, p*(p+1)/2))
     psi <- NA
   }else if(a_known){
     theta0 <- c(beta1)
-    lower <- c(-20,rep(-20,ncol(X)))
+    lower <- c(rep(-20,ncol(X)))
     psi <- NA
   }else{
     stop("model type not known")
@@ -647,21 +790,21 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   
   # set initial for the mixing
   if(mixing_var == "gamma"){
-    beta20 <- 1
+    beta20 <- log(M2)#1
     z_density <- gamma_density
     rzdensity <- rgamma_density
     deriv_log_density <- deriv_log_gamma_density
     Q_beta_2 <- Q_PG_beta_2
     Q_beta_2_deriv <- Q_PG_beta_2_deriv
   }else if(mixing_var == "ig"){
-    beta20 <- 0
+    beta20 <- log(M3)#0
     z_density <- ig_density
     rzdensity <- rig_density
     deriv_log_density <- deriv_log_ig_density
     Q_beta_2 <- Q_PIG_beta_2
     Q_beta_2_deriv <- Q_PIG_beta_2_deriv
   }else if(mixing_var == "ln"){
-    beta20 <- -1
+    beta20 <- log(sqrt(log(1 + M2)))#-1
     phi <- exp(beta20)
     z_density <- ln_density
     rzdensity <- rln_density
@@ -678,7 +821,6 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     a <- A[upper.tri(A, diag = TRUE)]
   }
   
-  theta0 <- c(beta20,theta0)  
   ## Loop starts ##
   
   log_lik <- -Inf
@@ -747,8 +889,8 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     
     ### poisson part
     out <- optim(par = theta0,
-                 fn = Q_P,
-                 gr = Q_P_deriv,
+                 fn = Q_P_no_phi,
+                 gr = Q_P_deriv_no_phi,
                  locs = locs_batch,
                  claims = claims_batch, 
                  exposure = exposure_batch, 
@@ -762,46 +904,43 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
                  lambda = lambda,
                  p = p,
                  eother = eother, 
-                 Q_beta_2 = Q_beta_2, 
-                 Q_beta_2_deriv = Q_beta_2_deriv,
-                 mixing = TRUE,
                  scaling_factor = scaling_factor,
                  a_known = a_known,
                  method = 'L-BFGS-B',
-                 control = list(maxit = 2),
+                 control = list(maxit = 10),
                  lower = lower)
 
     ## mixing part
-    
-    # out_beta2 = optim(beta20,
-    #                    Q_beta_2,
-    #                    gr = Q_beta_2_deriv,
-    #                    claims = claims_batch, 
-    #                    exposure =exposure_batch, 
-    #                    X2 = X2, 
-    #                    etheta = etheta,
-    #                    eother = eother,
-    #                    method = 'L-BFGS',
-    #                    control = list(maxit = 2))
-    # 
-    # beta2 <- out_beta2$par
-    # H_beta2 <- out_beta2$hessian
+
+  
+    out_beta2 = optim(beta20,
+                       fn = Q_beta_2,
+                       gr = Q_beta_2_deriv,
+                       claims = claims_batch,
+                       exposure =exposure_batch,
+                       etheta = etheta,
+                       eother = eother,
+                       method = 'L-BFGS',
+                       control = list(maxit = 2))
+
+    beta2 <- out_beta2$par
+    H_beta2 <- out_beta2$hessian
     
 
     theta <- out$par
-    beta2 <- out$par[1]
+
     if(model_type == "ordinary"){
-      beta1 <- out$par[2:(ncol(X)+1)]
+      beta1 <- out$par[1:(ncol(X)+0)]
     }else if(model_type == "learn_psi"){
-      beta1 <- out$par[2:(ncol(X)+1)]
+      beta1 <- out$par[1:(ncol(X)+0)]
       psi <- out$par[(ncol(X)+2):length(out$par)]
     }else if(model_type == "learn_graph" & !(a_known) ){
-      beta1 <- out$par[2:(ncol(X)+1)]
-      a <- out$par[(ncol(X)+2):length(out$par)]
+      beta1 <- out$par[1:(ncol(X)+0)]
+      a <- out$par[(ncol(X)+1):length(out$par)]
       A <- get_W_from_array(a, p)
     }
     if(a_known){
-      beta1 <- out$par[2:length(out$par)]
+      beta1 <- out$par[1:length(out$par)]
       theta <- out$par
     }
 
@@ -897,7 +1036,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   
   
   # Hessian part
-  Hessian <- optimHess(par = theta,
+  Hessian <- optimHess(par = c(beta2, theta),
                        fn = Q_P,
                        gr = Q_P_deriv,
                        locs = locs,
@@ -1042,150 +1181,28 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
 
 ##### Test some data set ###########
 
-# sim <- simulate_claims(20, 20, "graph", FALSE, mixing = "gamma", model_type = "poisson", exposure_lambda = 0)
+# sim <- simulate_claims(20, 200, "graph", FALSE, mixing = "ln", model_type = "poisson", exposure_lambda = 0)
 # 
 # 
+#  out_poisson <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", 
+#                         lambda = 0, sim$exposure, 
+#                         nr_em = 100, max_itr = 1000, a_known = FALSE)
+#  
+# beta1 <- out_poisson$beta1
+#  
 # 
 # 
-# 
-# out_poisson <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 0,
-#               exposure = sim$exposure, max_itr = 0, mixing_var = "gamma", nr_em = 20,
+# out_mixed <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 0,
+#               exposure = sim$exposure, max_itr = 0, mixing_var = "ln", nr_em = 60,Q_tol = 0,
 #               verbose = 2, sgd = FALSE, batch_size = 100, param_tol = 0, a_known = FALSE)
 # 
-# diag(solve(out_poisson$Hessian - out_poisson$var_loglik))
-
-
+# 
+# sum(abs(out_poisson$beta1 - sim$beta1))
+# sum(abs(out_mixed$beta1 - sim$beta1))
 # 
 # 
-# diag(solve(out_poisson$Hessian  - out_poisson$var_der_log_lik))
-# diag(solve(out_poisson$Hessian  - diag(out_poisson$ex2)))
-# diag(solve(out_poisson$Hessian  ))
-
+# sum(abs(out_poisson$a - sim$a))
+# sum(abs(out_mixed$a - sim$a))
 # 
 # 
-# out_none <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 0, exposure = sim$exposure, max_itr = 100, a_known = TRUE)
-# out_none$optim_obj$message
-# out_none$a
-# out_none$optim_obj
-
-
-#   A_est_p[[t]] <- out_none$a
-
-######### Simulate Data ################
-
-# A_est_p <- list()
-# beta_est_p <- list()
-# 
-# beta_est_ig <- list()
-# 
-# ts <- c(10, 20, 50, 70, 100, 200, 500, 1000)
-# for(t in ts){
-#   print(t)
-#   sim <- simulate_claims(100, t, FALSE, FALSE, mixing = "ig")
-#   
-#   out_none <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, NA, FALSE, "learn_graph", lambda = 0, exposure = sim$exposure, max_itr = 100)
-#   A_est_p[[t]] <- out_none$a
-#   beta_est_p[[t]] <- out_none$beta1
-#   
-#   out_ig <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, NA, FALSE, "learn_graph", lambda = 0, 
-#                             exposure = sim$exposure, max_itr = 100, mixing_var = "ln")
-#   A_est_ig[[t]] <- out_ig$a
-#   beta_est_ig[[t]] <- out_ig$beta1
-#   
-#   
-#   
-# }
-# 
-# a_none_error <- lapply(A_est_p, function(x, y){sum(abs(x-y))}, y = 15*sim$A[upper.tri(sim$A, T)])
-# a_ig_error <- lapply(A_est_ig, function(x, y){sum(abs(x-y))}, y = 15*sim$A[upper.tri(sim$A, T)])
-# 
-# 
-# b_none_error <- lapply(beta_est_p, function(x, y){sum(abs(x-y))}, y = sim$beta1)
-# b_ig_error <- lapply(beta_est_ig, function(x, y){sum(abs(x-y))}, y = sim$beta1)
-# 
-# 
-# library(tidyverse)
-# ggplot(data.frame(t = ts,
-#                    poissson_error = unlist(a_none_error[ts]),
-#                    ig_error = unlist(a_ig_error[ts])
-#                      )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "IG"))
-# 
-# 
-# 
-# ggplot(data.frame(t = ts,
-#                   poissson_error = unlist(b_none_error[ts]),
-#                   ig_error = unlist(b_ig_error[ts])
-# )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "IG"))
-# 
-# 
-# 
-# 
-# 
-# A_est_p_l <- list()
-# beta_est_p_l <- list()
-# 
-# A_est_ig_l <- list()
-# beta_est_ig_l <- list()
-# 
-# lambdas <- c(0, 0.01, 0.02, 0.025, 0.05, 0.1, 0.5, 1)*100*250
-# for(lambda in lambdas){
-#   print(t)
-#   sim <- simulate_claims(100, 250, FALSE, FALSE, mixing = "ig")
-#   
-#   out_none <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, NA, FALSE, 
-#                       "learn_graph", lambda = 25000, exposure = sim$exposure, max_itr = 100)
-#   A_est_p_l[[as.character(lambda)]] <- out_none$a
-#   beta_est_p_l[[as.character(lambda)]] <- out_none$beta1
-#   
-#   out_ig <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, NA, FALSE, 
-#                           "learn_graph", lambda = lambda, 
-#                           exposure = sim$exposure, max_itr = 100, mixing_var = "ig")
-#   A_est_ig_l[[as.character(lambda)]] <- out_ig$a
-#   beta_est_ig_l[[as.character(lambda)]] <- out_ig$beta1
-#   
-#   
-#   
-# }
-# 
-# a_none_nr_edgegs <- unlist(lapply(A_est_p, function(x){sum(abs(x>1e-3))   }  ))
-# a_ig_nr_edgegs <- unlist(lapply(A_est_ig_l, function(x){sum(abs(x>1e-3))   }  ))
-# 
-# 
-# 
-# 
-# library(tidyverse)
-# ggplot(data.frame(lambda = lambdas,
-#                   poissson_error = unlist(a_none_error[ts]),
-#                   ig_error = unlist(a_ig_error[ts])
-# )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "IG"))
-# 
-# 
-# 
-# ggplot(data.frame(t = ts,
-#                   poissson_error = unlist(b_none_error[ts]),
-#                   ig_error = unlist(b_ig_error[ts])
-# )) +
-#   geom_line(aes(x = t, y = poissson_error, color = "Poisson"))+
-#   geom_line(aes(x = t, y = ig_error, color = "IG"))
-# 
-# 
-# 
-# save.image("Ordinary.RData")
-# 
-
-
-
-
-
-
-
-
-
-
-
+# diag(solve(out_mixed$Hessian - out_mixed$var_loglik))

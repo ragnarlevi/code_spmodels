@@ -34,7 +34,12 @@ simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, 
   set.seed(seed)
   
   # store claim data
-  locs <- sample(1:area, n, replace = TRUE)
+  while(TRUE){
+    locs <- sample(1:area, n, replace = TRUE)
+    if(length(unique(locs)) == area){
+      break
+    }
+  }
   claims <- matrix(0, nrow = n, ncol = years+1)
   mu <- matrix(0, nrow = n, ncol = years)
   phi <- matrix(0, nrow = n, ncol = years)
