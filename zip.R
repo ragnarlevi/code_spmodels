@@ -372,183 +372,183 @@ Q_ZIP_mixed <- function(param, locs, claims, exposure, X_mat, agg_claims, years,
 }
 
 
-
-# Poisson mixture model 
-zip_mixed <- function(claims, X1, locs, years,  agg_claims, A, additive, model_type, exposure, lambda = 0, nr_em = 100, max_itr = 1000, mixing_var = "gamma", z= "", a_known = FALSE){
-  
-  
-  if(model_type != "learn_graph"){
-    a_known <- FALSE
-  }
-  
-  
-  p <- length(unique(locs))
-  
-  # Set initial parameters
-  out_zip <- zip(claims, X1, locs, years, agg_claims, A, additive, model_type, lambda = lambda, exposure, nr_em = 100, max_itr = 300)
-  beta1 <- out_zip$beta1
-  prop <- out_zip$prop
-  
-  
-  if(model_type == "learn_graph"){
-    a <- rep(1,p*(p+1)/2)*0.001
-    A <- get_W_from_array(a, p)
-    lower_a <- rep(1e-4, p*(p+1)/2)
-    upper_a <- rep(0.5, p*(p+1)/2)
-  }else if(model_type == "learn_psi" ){
-    psi <- rep(1,p)
-  }
-  
-  
-  
-  
-  # add gradients depending on model type
-  if(model_type == "ordinary"){
-    theta0 <- c(beta1, prop)
-    lower <- c(rep(-20,ncol(X1)))
-  }else if(model_type == "learn_psi"){
-    theta0 <- c(beta1, psi, prop)
-    lower <- c(rep(-20,ncol(X1)), rep(1e-8, p))
-  }else if(model_type == "learn_graph" & !a_known){
-    theta0 <- c(beta1, a, prop)
-    lower <- c(rep(-20,ncol(X1)), rep(1e-8, p*(p+1)/2))
-    psi <- NA
-  }else if(a_known){
-    theta0 <- c(beta1)
-    lower <- c(rep(-20,ncol(X1)))
-    psi <- NA
-  }else{
-    stop("model type not known")
-  }
-  
-  if(a_known){
-    theta0 <- c(beta1)
-    a <- A[upper.tri(A, TRUE)]
-  }
-  
-  # set initial for the mixing
-  if(mixing_var == "gamma"){
-    beta20 <- 1
-  }else if(mixing_var == "ig"){
-    beta20 <- 0
-  }else if(mixing_var == "ln"){
-    beta20 <- 0
-  }else{
-    stop("mixing type not known")
-  }
-  
-  
-  X2 <-  as.matrix(rep(1, nrow(X1)))
-  
-  
-  for(i in 1:nr_em){
-    
-    
-    se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
-    nu <- as.numeric(exp(X1 %*% beta1))
-    mu <-   get_mu(nu, se$spatial_effect, exposure, additive)
-    phi <- exp(beta20)
-    
-
- 
-    
-    ### zip part
-    out <- optim(par = theta0,
-                 fn = Q_ZIP_mixed,
-                 #gr = Q_P_deriv,
-                 locs = locs,
-                 claims = claims, 
-                 exposure = exposure, 
-                 X_mat = X1, 
-                 agg_claims = agg_claims, 
-                 years = years,
-                 A = A,
-                 additive = additive,
-                 model_type = model_type,
-                 lambda = lambda,
-                 p = p,
-                 mu_old = mu,
-                 phi = phi,
-                 prop = prop,
-                 a_known = a_known,
-                 method = 'L-BFGS-B',
-                 control = list(maxit = ifelse(mixing_var == "none", 1000, 1)),
-                 lower = lower,
-                 hessian = T)
-    
-    
-    ## mixing part
-    
-    out_beta2 = optim(beta20,
-                      Q_beta_2,
-                      gr = Q_beta_2_deriv,
-                      claims = claims, 
-                      exposure =exposure, 
-                      X2 = X2, 
-                      etheta = etheta,
-                      eother = eother,
-                      method = 'L-BFGS',
-                      control = list(maxit = 2),
-                      hessian = TRUE)
-    
-    beta2 <- out_beta2$par
-    H_beta2 <- out_beta2$hessian
-    
-    
-    
-    if(model_type == "ordinary"){
-      beta1 <- out$par[1:ncol(X1)]
-      theta <- beta1
-    }else if(model_type == "learn_psi"){
-      beta1 <- out$par[1:ncol(X1)]
-      psi <- out$par[(ncol(X1)+1):length(out$par)]
-      theta <- c(beta1, psi)
-    }else if(model_type == "learn_graph"  & !a_known ){
-      beta1 <- out$par[1:ncol(X1)]
-      a <- out$par[(ncol(X1)+1):length(out$par)]
-      A <- get_W_from_array(a, p)
-      theta <- c(beta1, a)
-    }
-    
-    if(a_known){
-      beta1 <- out$par
-      theta <- beta1
-    }
-    
-    # check convergence
-    
-    if(sum(abs(theta-theta0))/sum(abs(theta0)) < 1e-5 &  sum(abs(beta2-beta20))/sum(abs(beta20)) < 1e-5 ){
-      break
-    }else{
-      theta0 <- theta
-      beta20 <- beta2
-    }
-    
-    
-    
-  }
-  
-  
-  
-  if(model_type == "ordinary"){
-    beta1 <- out$par[1:ncol(X1)]
-  }else if(model_type == "learn_psi"){
-    beta1 <- out$par[1:ncol(X1)]
-    psi <- out$par[(ncol(X1)+1):length(out$par)]
-  }else if(model_type == "learn_graph"){
-    beta1 <- out$par[1:ncol(X1)]
-    a <- out$par[(ncol(X1)+1):length(out$par)]
-    A <- get_W_from_array(a, p)
-  }
-  
-  
-  return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], beta2 = beta2 , H = out$hessian, H_beta2 = H_beta2, mu = mu, optim_obj = out, model_type = model_type))
-  
-  
-}
-
-
-
-
+# 
+# # Poisson mixture model 
+# zip_mixed <- function(claims, X1, locs, years,  agg_claims, A, additive, model_type, exposure, lambda = 0, nr_em = 100, max_itr = 1000, mixing_var = "gamma", z= "", a_known = FALSE){
+#   
+#   
+#   if(model_type != "learn_graph"){
+#     a_known <- FALSE
+#   }
+#   
+#   
+#   p <- length(unique(locs))
+#   
+#   # Set initial parameters
+#   out_zip <- zip(claims, X1, locs, years, agg_claims, A, additive, model_type, lambda = lambda, exposure, nr_em = 100, max_itr = 300)
+#   beta1 <- out_zip$beta1
+#   prop <- out_zip$prop
+#   
+#   
+#   if(model_type == "learn_graph"){
+#     a <- rep(1,p*(p+1)/2)*0.001
+#     A <- get_W_from_array(a, p)
+#     lower_a <- rep(1e-4, p*(p+1)/2)
+#     upper_a <- rep(0.5, p*(p+1)/2)
+#   }else if(model_type == "learn_psi" ){
+#     psi <- rep(1,p)
+#   }
+#   
+#   
+#   
+#   
+#   # add gradients depending on model type
+#   if(model_type == "ordinary"){
+#     theta0 <- c(beta1, prop)
+#     lower <- c(rep(-20,ncol(X1)))
+#   }else if(model_type == "learn_psi"){
+#     theta0 <- c(beta1, psi, prop)
+#     lower <- c(rep(-20,ncol(X1)), rep(1e-8, p))
+#   }else if(model_type == "learn_graph" & !a_known){
+#     theta0 <- c(beta1, a, prop)
+#     lower <- c(rep(-20,ncol(X1)), rep(1e-8, p*(p+1)/2))
+#     psi <- NA
+#   }else if(a_known){
+#     theta0 <- c(beta1)
+#     lower <- c(rep(-20,ncol(X1)))
+#     psi <- NA
+#   }else{
+#     stop("model type not known")
+#   }
+#   
+#   if(a_known){
+#     theta0 <- c(beta1)
+#     a <- A[upper.tri(A, TRUE)]
+#   }
+#   
+#   # set initial for the mixing
+#   if(mixing_var == "gamma"){
+#     beta20 <- 1
+#   }else if(mixing_var == "ig"){
+#     beta20 <- 0
+#   }else if(mixing_var == "ln"){
+#     beta20 <- 0
+#   }else{
+#     stop("mixing type not known")
+#   }
+#   
+#   
+#   X2 <-  as.matrix(rep(1, nrow(X1)))
+#   
+#   
+#   for(i in 1:nr_em){
+#     
+#     
+#     se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
+#     nu <- as.numeric(exp(X1 %*% beta1))
+#     mu <-   get_mu(nu, se$spatial_effect, exposure, additive)
+#     phi <- exp(beta20)
+#     
+# 
+#  
+#     
+#     ### zip part
+#     out <- optim(par = theta0,
+#                  fn = Q_ZIP_mixed,
+#                  #gr = Q_P_deriv,
+#                  locs = locs,
+#                  claims = claims, 
+#                  exposure = exposure, 
+#                  X_mat = X1, 
+#                  agg_claims = agg_claims, 
+#                  years = years,
+#                  A = A,
+#                  additive = additive,
+#                  model_type = model_type,
+#                  lambda = lambda,
+#                  p = p,
+#                  mu_old = mu,
+#                  phi = phi,
+#                  prop = prop,
+#                  a_known = a_known,
+#                  method = 'L-BFGS-B',
+#                  control = list(maxit = ifelse(mixing_var == "none", 1000, 1)),
+#                  lower = lower,
+#                  hessian = T)
+#     
+#     
+#     ## mixing part
+#     
+#     out_beta2 = optim(beta20,
+#                       Q_beta_2,
+#                       gr = Q_beta_2_deriv,
+#                       claims = claims, 
+#                       exposure =exposure, 
+#                       X2 = X2, 
+#                       etheta = etheta,
+#                       eother = eother,
+#                       method = 'L-BFGS',
+#                       control = list(maxit = 2),
+#                       hessian = TRUE)
+#     
+#     beta2 <- out_beta2$par
+#     H_beta2 <- out_beta2$hessian
+#     
+#     
+#     
+#     if(model_type == "ordinary"){
+#       beta1 <- out$par[1:ncol(X1)]
+#       theta <- beta1
+#     }else if(model_type == "learn_psi"){
+#       beta1 <- out$par[1:ncol(X1)]
+#       psi <- out$par[(ncol(X1)+1):length(out$par)]
+#       theta <- c(beta1, psi)
+#     }else if(model_type == "learn_graph"  & !a_known ){
+#       beta1 <- out$par[1:ncol(X1)]
+#       a <- out$par[(ncol(X1)+1):length(out$par)]
+#       A <- get_W_from_array(a, p)
+#       theta <- c(beta1, a)
+#     }
+#     
+#     if(a_known){
+#       beta1 <- out$par
+#       theta <- beta1
+#     }
+#     
+#     # check convergence
+#     
+#     if(sum(abs(theta-theta0))/sum(abs(theta0)) < 1e-5 &  sum(abs(beta2-beta20))/sum(abs(beta20)) < 1e-5 ){
+#       break
+#     }else{
+#       theta0 <- theta
+#       beta20 <- beta2
+#     }
+#     
+#     
+#     
+#   }
+#   
+#   
+#   
+#   if(model_type == "ordinary"){
+#     beta1 <- out$par[1:ncol(X1)]
+#   }else if(model_type == "learn_psi"){
+#     beta1 <- out$par[1:ncol(X1)]
+#     psi <- out$par[(ncol(X1)+1):length(out$par)]
+#   }else if(model_type == "learn_graph"){
+#     beta1 <- out$par[1:ncol(X1)]
+#     a <- out$par[(ncol(X1)+1):length(out$par)]
+#     A <- get_W_from_array(a, p)
+#   }
+#   
+#   
+#   return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], beta2 = beta2 , H = out$hessian, H_beta2 = H_beta2, mu = mu, optim_obj = out, model_type = model_type))
+#   
+#   
+# }
+# 
+# 
+# 
+# 
 
 

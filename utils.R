@@ -27,7 +27,7 @@ expected_h_integration <- function(y, phi, pi, mu, z_density, h_func, likelihood
                                    phi_old = phi, pi_old = pi, mu_old = mu) {
   
   if(special_case){
-    return(special_fun(z, y, pi, mu))
+    return(special_fun(z, y, pi, mu ,phi))
   }
   
   # print(length(y))
@@ -63,7 +63,7 @@ expected_h_MCEM <- function(y,  phi, pi, mu, h_func, likelihood_func, rzdensity,
                             phi_old = phi, pi_old = pi, mu_old = mu) {
   
   if(special_case){
-    return(special_fun(z, y, pi, mu))
+    return(special_fun(z, y, pi, mu, phi))
   }
   # Draw S samples from the z prior:
   z_samples <- rzdensity(S, phi_old)
@@ -84,7 +84,7 @@ expected_h_legendre <- function(y, phi, pi, mu, z_density, h_func, likelihood_fu
   
   
   if(special_case){
-    return(special_fun(z, y, pi, mu))
+    return(special_fun(z, y, pi, mu, phi))
   }
   
   if (!requireNamespace("statmod", quietly = TRUE)) {
@@ -124,7 +124,7 @@ expected_h_hermite <- function(y,  phi, pi, mu, z_density, h_func, likelihood_fu
                                phi_old = phi, pi_old = pi, mu_old = mu) {
   
   if(special_case){
-    return(special_fun(z, y, pi, mu))
+    return(special_fun(z, y, pi, mu, phi))
   }
   
   if (!requireNamespace("statmod", quietly = TRUE)) {
@@ -198,10 +198,6 @@ expected_h <- function(y, phi, pi, mu, z_density, h_func, likelihood_func, rzden
                                mu_old  = mu_old)
       },
       error = function(e) {
-        print(y)
-        print(mu)
-        print(pi)
-        print(phi)
 
         warning("`integrate()` failed: ", paste0(y, " ", mu, " ", pi, " ", phi),
                 "\n  falling back to Gauss–Legendre quadrature.")
@@ -291,9 +287,9 @@ get_grad_a <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, 
 get_grad_a_2 <- function(additive, grad_mu, agg_claims, years,locs, exposure, nu, lambda, nr_regions){
 
   if(additive){
-    g2 <- 1 * t(agg_claims[, years, drop = FALSE]) * 1
+    g2 <- 1 * t(agg_claims[, years, drop = FALSE]) * exp(log(exposure))
   }else{
-    g2 <-  1 * t(agg_claims[,  years, drop = FALSE]) * 1 * as.numeric(nu)
+    g2 <-  1 * t(agg_claims[,  years, drop = FALSE]) * exp(log(exposure)) * as.numeric(nu)
   }
   G2 <- matrix(0,nrow = nr_regions, ncol = nr_regions, byrow = T)
   G2[locs,] <- g2

@@ -2,7 +2,7 @@
 #########################
 # 1. Simulate Data
 #########################
-
+source("utils.R")
 
 
 # Function to generate a sparse matrix with positive numbers
@@ -63,8 +63,11 @@ simulate_claims <- function(n, years, spatial_type, additive, mixing, area = 5, 
   
   
   psi_true <- runif(area, 1, 3)
-  
-  prop_true <- 0.7
+  if(model_type == "hurdle"){
+    prop_true <- 0.4
+  }else{
+    prop_true <- 0.7
+  }
   p <- length(unique(locs))
   
   if(mixing == "none"){
@@ -375,6 +378,592 @@ plot_graphs <- function(A_est, A_true){
   
   return(list(true_false_graph = true_false_graph, side_by_side = side_by_side))
   
+}
+
+
+
+plot_per_lambda <- function(model, ids, dens, A_compare = "50-5"){
+  betas_p <- list()
+  betas_mp <- list()
+  betas_mp_known <- list()
+  
+  betas2_mp <- list()
+  betas2_mp_known <- list()
+  
+  a_p <- list()
+  a_mp <- list()
+  a_mp_known <- list()
+  
+  a_p_info <- list()
+  a_ig_info <- list()
+  for(id in ids){
+    
+    tmp <- new.env()
+    loaded_objs <- load(paste0("sim_data/", model, "_per_t_lambda", dens, "id", id, ".RData") , envir = tmp)
+    my_list <- mget(loaded_objs, envir = tmp)
+    
+    
+    betas_p[[as.character(id)]] <- bind_rows(my_list$beta_est_p)
+    betas_p[[as.character(id)]]$id <- id
+    mat <- do.call(rbind, strsplit(names(my_list$beta_est_p), "-", fixed = TRUE))
+    betas_p[[as.character(id)]]$t <- as.numeric(mat[,1])
+    betas_p[[as.character(id)]]$lambda <- as.numeric(mat[,2])
+    
+    betas_mp[[as.character(id)]] <- bind_rows(my_list$beta_est_ig)
+    betas_mp[[as.character(id)]]$id <- id
+    betas_mp[[as.character(id)]]$t <- as.numeric(mat[,1])
+    betas_mp[[as.character(id)]]$lambda <- as.numeric(mat[,2])
+    
+    
+    a_p[[as.character(id)]] <- as.data.frame(t(bind_rows(my_list$A_est_p)))
+    a_p[[as.character(id)]]$id <- id
+    a_p[[as.character(id)]]$t <- as.numeric(mat[,1])
+    a_p[[as.character(id)]]$lambda <- as.numeric(mat[,2])
+    
+    a_mp[[as.character(id)]] <- as.data.frame(t(bind_rows(my_list$A_est_ig)))
+    a_mp[[as.character(id)]]$id <- id
+    a_mp[[as.character(id)]]$t <- as.numeric(mat[,1])
+    a_mp[[as.character(id)]]$lambda <- as.numeric(mat[,2])
+    
+    
+    a_p_info[[as.character(id)]] <- data.frame(t = mat[, 1], lambda = mat[, 2])
+    a_p_info[[as.character(id)]]$f1 <- sapply(my_list$A_p_info, function(x) x$f1_score)
+    a_p_info[[as.character(id)]]$recall <- sapply(my_list$A_p_info, function(x) x$recall)
+    a_p_info[[as.character(id)]]$precision <- sapply(my_list$A_p_info, function(x) x$precision)
+    a_p_info[[as.character(id)]]$relative_error <- sapply(my_list$A_p_info, function(x) x$relative_error)
+    
+    a_ig_info[[as.character(id)]] <- data.frame(t = mat[, 1], lambda = mat[, 2])
+    a_ig_info[[as.character(id)]]$f1 <- sapply(my_list$A_ig_info, function(x) x$f1_score)
+    a_ig_info[[as.character(id)]]$recall <- sapply(my_list$A_ig_info, function(x) x$recall)
+    a_ig_info[[as.character(id)]]$precision <- sapply(my_list$A_ig_info, function(x) x$precision)
+    a_ig_info[[as.character(id)]]$relative_error <- sapply(my_list$A_ig_info, function(x) x$relative_error)
+    
+    
+    
+    a_true <- my_list$sim$a
+    beta_true <- my_list$sim$beta1
+    beta2_true <- my_list$sim$beta2
+    
+  }
+  
+  betas_p <- bind_rows(betas_p)
+  betas_mp <- bind_rows(betas_mp)
+  a_p <- bind_rows(a_p)
+  a_mp <- bind_rows(a_mp)
+  a_p_info <- bind_rows(a_p_info)
+  a_ig_info <- bind_rows(a_ig_info)
+  
+  
+  
+  # error 
+  
+  beta_true_matrix <- matrix(beta_true,
+                             nrow = nrow(betas_p),
+                             ncol = length(beta_true),
+                             byrow = TRUE)
+  
+  betas_p$error <- rowSums(abs(betas_p[, c("X11", "X12", "X13")] - beta_true_matrix))
+  betas_mp$error <- rowSums(abs(betas_mp[, c("X11", "X12", "X13")] - beta_true_matrix))
+  
+  
+  a_true_matrix <- matrix(a_true,
+                          nrow = nrow(a_p),
+                          ncol = length(a_true),
+                          byrow = TRUE)
+  a_p$error <- rowSums(abs(a_p[ ,1:(10*11/2)] - a_true_matrix))
+  a_mp$error <- rowSums(abs(a_mp[ ,1:(10*11/2)] - a_true_matrix))
+  
+  
+  ret <- list()
+  
+  
+  df1 <- betas_p %>% mutate(model = "Poisson")
+  df2 <- betas_mp %>% mutate(model = "Mixed Poisson")
+  
+  # bind into one
+  betas_all <- bind_rows(df1, df2)
+  
+  # dodged box‐plot
+  ret$beta1_plot <- ggplot(betas_all %>% group_by(t, lambda, model) %>% summarise(y = mean(X11)), aes(x = t, y = y)) +
+    # true parameter line + points
+    geom_line(
+      aes( color = as.factor(lambda))
+    ) +
+    geom_line(
+      aes(x = t, y = 1, group = 1),
+      inherit.aes = FALSE,
+      color       = "black",
+      size        = 1,
+      alpha = 0.5
+    ) +
+    labs(
+      x     = "Time (t)",
+      y     = expression(beta[1] ~ " estimate"),
+      fill  = "Model spec",
+      title = expression(beta[1] ~ " over Time, by Model"),
+      color  = "Lambda"
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    ) + 
+    facet_wrap(~model)
+  
+  ret$beta1_plot
+  
+  # dodged box‐plot
+  ret$beta_error_plot <- ggplot(betas_all, aes(x = factor(t), y = error, fill = model)) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = expression(l[1] ~ " error"),
+      fill  = "Model spec",
+      title = expression(l[1] ~ " error over Time, by Model")
+    ) +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    ) + 
+    facet_wrap(~ lambda)
+  
+  ret$beta_error_plot 
+  
+  df1 <- a_p %>% mutate(model = "Poisson")
+  df2 <- a_mp %>% mutate(model = "Mixed Poisson")
+  
+  # bind into one
+  as_all <- bind_rows(df1, df2)
+  
+  # dodged box‐plot
+  ret$edge_plot <- ggplot(as_all %>% group_by(t, lambda, model) %>% summarise(y = mean(V8)), aes(x = T, y = y)) +
+    # true parameter line + points
+    geom_line(
+      aes(x = t, y = a_true[8], group = 1),
+      inherit.aes = FALSE,
+      color       = "black",
+      size        = 1,
+      alpha = 1
+    ) +
+    geom_line(
+      aes(x =t, color = as.factor(lambda))
+    ) +
+    labs(
+      x     = "Time (t)",
+      y     = latex2exp::TeX("$a_{1,1}$ estimate"),
+      fill  = "Model spec",
+      title = latex2exp::TeX("$a_{1,1}$ over time, by model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    ) + facet_wrap(~ model)
+  
+  ret$edge_plot
+  
+  # dodged box‐plot
+  ret$edge_error_plot <- ggplot(as_all %>% filter(lambda <= 10), aes(x = factor(t), y = log(error), fill = model)) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = latex2exp::TeX("$a_{1,1}$ estimate"),
+      fill  = "Model spec",
+      title = latex2exp::TeX("$a_{1,1}$ over time, by model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    ) + facet_wrap(~lambda)
+  
+  ret$edge_error_plot 
+  
+  
+  
+  a_p_info$model <- "Poisson"
+  a_ig_info$model <- "Mixed Poisson"
+  
+  df_info <- bind_rows(a_p_info, a_ig_info)
+  
+  # dodged box‐plot
+  ret$f1_plot <- ggplot(df_info, 
+                        aes(x = as.numeric(lambda),    # make sure λ is numeric
+                            y = f1, 
+                            color = model, 
+                            fill  = model,
+                            group = model)) +
+    # ribbon: mean ± SE
+    stat_summary(fun.data = mean_se, 
+                 geom     = "ribbon", 
+                 alpha    = 0.2, 
+                 color    = NA) +
+    # mean line
+    stat_summary(fun      = mean, 
+                 geom     = "line", 
+                 size     = 1) +
+    labs(
+      x     = expression(lambda),
+      y     = "f1 value",
+      color = "Model spec",
+      fill  = "Model spec",
+      title = "f1 value over λ, by Model, Time, and time points"
+    ) +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title  = element_text(hjust = 0.5),
+      axis.text.x = element_text(angle = 45, vjust = 0.5)
+    ) +
+    facet_wrap(~ t, scales = "free_x")
+  
+  ret$f1_plot
+  
+  
+  # dodged box‐plot
+  ret$recall_plot <- ggplot(df_info, 
+                            aes(x = as.numeric(lambda),    # make sure λ is numeric
+                                y = recall, 
+                                color = model, 
+                                fill  = model,
+                                group = model)) +
+    # ribbon: mean ± SE
+    stat_summary(fun.data = mean_se, 
+                 geom     = "ribbon", 
+                 alpha    = 0.2, 
+                 color    = NA) +
+    # mean line
+    stat_summary(fun      = mean, 
+                 geom     = "line", 
+                 size     = 1) +
+    labs(
+      x     = expression(lambda),
+      y     = "f1 value",
+      color = "Model spec",
+      fill  = "Model spec",
+      title = "f1 value over λ, by Model, Time, and time points"
+    ) +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title  = element_text(hjust = 0.5),
+      axis.text.x = element_text(angle = 45, vjust = 0.5)
+    ) +
+    facet_wrap(~ t, scales = "free_x")
+  
+  ret$recall_plot
+  
+  # dodged box‐plot
+  ret$precision_plot <- ggplot(df_info, 
+                               aes(x = as.numeric(lambda),    # make sure λ is numeric
+                                   y = precision, 
+                                   color = model, 
+                                   fill  = model,
+                                   group = model)) +
+    # ribbon: mean ± SE
+    stat_summary(fun.data = mean_se, 
+                 geom     = "ribbon", 
+                 alpha    = 0.2, 
+                 color    = NA) +
+    # mean line
+    stat_summary(fun      = mean, 
+                 geom     = "line", 
+                 size     = 1) +
+    labs(
+      x     = expression(lambda),
+      y     = "f1 value",
+      color = "Model spec",
+      fill  = "Model spec",
+      title = "f1 value over λ, by Model, Time, and time points"
+    ) +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title  = element_text(hjust = 0.5),
+      axis.text.x = element_text(angle = 45, vjust = 0.5)
+    ) +
+    facet_wrap(~ t, scales = "free_x")
+  
+  ret$precision_plot
+  
+  
+  
+  graph_plot_out <- plot_graphs(get_W_from_array(my_list$A_est_ig[[A_compare]], 10), my_list$sim$A)
+  
+  
+  ret$side_by_side <- graph_plot_out$side_by_side
+  
+  ret$true_false_graph<- graph_plot_out$true_false_graph
+  
+  
+  return(ret)
+}
+
+
+plot_per_t <- function(model, ids, dens){
+  betas_p <- list()
+  betas_mp <- list()
+  betas_mp_known <- list()
+  
+  betas2_mp <- list()
+  betas2_mp_known <- list()
+  
+  a_p <- list()
+  a_mp <- list()
+  a_mp_known <- list()
+  
+  time_p <- list()
+  time_mp <- list()
+  for(id in ids){
+    
+    tmp <- new.env()
+    loaded_objs <- load(paste0("sim_data/", model, "_ln_per_t", dens, "id", id, ".RData") , envir = tmp)
+    my_list <- mget(loaded_objs, envir = tmp)
+    
+    
+    betas_p[[as.character(id)]] <- bind_rows(my_list$beta_est_p)
+    betas_p[[as.character(id)]]$id <- id
+    betas_p[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_p))
+    
+    betas_mp[[as.character(id)]] <- bind_rows(my_list$beta_est_ig)
+    betas_mp[[as.character(id)]]$id <- id
+    betas_mp[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_ig))
+    
+    betas_mp_known[[as.character(id)]] <- bind_rows(my_list$beta_est_known_ig)
+    betas_mp_known[[as.character(id)]]$id <- id
+    betas_mp_known[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_known_ig))
+    
+    a_p[[as.character(id)]] <- as.data.frame(t(bind_rows(my_list$A_est_p)))
+    a_p[[as.character(id)]]$id <- id
+    a_p[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_p))
+    
+    a_mp[[as.character(id)]] <- as.data.frame(t(bind_rows(my_list$A_est_ig)))
+    a_mp[[as.character(id)]]$id <- id
+    a_mp[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_ig))
+    
+    betas2_mp[[as.character(id)]] <- as.data.frame(t(data.frame(my_list$beta2_est_ig)))
+    betas2_mp[[as.character(id)]]$id  <- id
+    betas2_mp[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_ig))
+    
+    betas2_mp_known[[as.character(id)]]<- as.data.frame(t(data.frame(my_list$beta2_est_known_ig)))
+    betas2_mp_known[[as.character(id)]]$id  <- id
+    betas2_mp_known[[as.character(id)]]$t <- as.numeric(names(my_list$beta_est_ig))
+    
+    
+    time_p[[as.character(id)]] <- data.frame(time = sapply(my_list$time_p,  function(dt) as.numeric(dt, units = "mins")),
+                                             id = id,
+                                             t = as.numeric(names(my_list$beta_est_ig)))
+    
+    time_mp[[as.character(id)]] <- data.frame(time = sapply(my_list$time_ig,  function(dt) as.numeric(dt, units = "mins")),
+                                             id = id,
+                                             t = as.numeric(names(my_list$beta_est_ig)))
+    
+    a_true <- my_list$sim$a
+    beta_true <- my_list$sim$beta1
+    beta2_true <- my_list$sim$beta2
+    
+  }
+  
+  betas_p <- bind_rows(betas_p)
+  betas_mp <- bind_rows(betas_mp)
+  betas_mp_known <- bind_rows(betas_mp_known)
+  a_p <- bind_rows(a_p)
+  a_mp <- bind_rows(a_mp)
+  time_mp <- bind_rows(time_mp)
+  time_p <- bind_rows(time_p)
+  
+  betas2_mp <- bind_rows(betas2_mp)
+  betas2_mp_known <- bind_rows(betas2_mp_known)
+  
+  # error 
+  
+  beta_true_matrix <- matrix(beta_true,
+                             nrow = nrow(betas_p),
+                             ncol = length(beta_true),
+                             byrow = TRUE)
+  
+  betas_p$error <- rowSums(abs(betas_p[, c("X11", "X12", "X13")] - beta_true_matrix))
+  betas_mp$error <- rowSums(abs(betas_mp[, c("X11", "X12", "X13")] - beta_true_matrix))
+  betas_mp_known$error <- rowSums(abs(betas_mp_known[, c("X11", "X12", "X13")] - beta_true_matrix))
+  
+  
+  a_true_matrix <- matrix(a_true,
+                          nrow = nrow(a_p),
+                          ncol = length(a_true),
+                          byrow = TRUE)
+  a_p$error <- rowSums(abs(a_p[ ,1:(10*11/2)] - a_true_matrix))
+  a_mp$error <- rowSums(abs(a_mp[ ,1:(10*11/2)] - a_true_matrix))
+  
+  
+  ret <- list()
+  
+  
+  df1 <- betas_p %>% mutate(model = "Poisson")
+  df2 <- betas_mp %>% mutate(model = "Mixed Poisson")
+  df3 <- betas_mp_known %>% mutate(model = "Mixed Poisson A known")
+  
+  # bind into one
+  betas_all <- bind_rows(df1, df2, df3)
+  
+  # dodged box‐plot
+  ret$beta1_plot <- ggplot(betas_all, aes(x = factor(t), y = X11, fill = model)) +
+    # true parameter line + points
+    geom_line(
+      aes(x = factor(t), y = 1, group = 1),
+      inherit.aes = FALSE,
+      color       = "black",
+      size        = 1,
+      alpha = 0.5
+    ) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = expression(beta[1] ~ " estimate"),
+      fill  = "Model spec",
+      title = expression(beta[1] ~ " over Time, by Model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    )
+  
+  # dodged box‐plot
+  ret$beta_error_plot <- ggplot(betas_all, aes(x = factor(t), y = error, fill = model)) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = expression(l[1] ~ " error"),
+      fill  = "Model spec",
+      title = expression(l[1] ~ " error over Time, by Model")
+    ) +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    )
+  
+  
+  df1 <- a_p %>% mutate(model = "Poisson")
+  df2 <- a_mp %>% mutate(model = "Mixed Poisson")
+  
+  # bind into one
+  as_all <- bind_rows(df1, df2)
+  
+  # dodged box‐plot
+  ret$edge_plot <- ggplot(as_all, aes(x = factor(t), y = V8, fill = model)) +
+    # true parameter line + points
+    geom_line(
+      aes(x = factor(t), y = a_true[8], group = 1),
+      inherit.aes = FALSE,
+      color       = "black",
+      size        = 1,
+      alpha = 0.5
+    ) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = latex2exp::TeX("$a_{1,1}$ estimate"),
+      fill  = "Model spec",
+      title = latex2exp::TeX("$a_{1,1}$ over time, by model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    )
+  
+  
+  # dodged box‐plot
+  ret$edge_error_plot <- ggplot(as_all, aes(x = factor(t), y = log(error), fill = model)) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = latex2exp::TeX("$a_{1,1}$ estimate"),
+      fill  = "Model spec",
+      title = latex2exp::TeX("$a_{1,1}$ over time, by model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    )
+  
+  
+  
+  
+  df1 <- time_mp %>% mutate(model = "Mixed Poisson")
+  df2 <- time_p %>% mutate(model = "Poisson")
+  times_df <- bind_rows(df1, df2)
+  
+  ret$times <- ggplot(times_df, aes(x = as.factor(t), y = log(time), fill = model)) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2)+ 
+    labs(
+      x     = "Time points (t)",
+      y     = latex2exp::TeX("$log$ complexity"),
+      fill  = "Model spec",
+      title = latex2exp::TeX("$a_{1,1}$ over time, by model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    )
+  ret$times
+  
+  df1 <- betas2_mp %>% mutate(model = "Mixed Poisson")
+  df2 <- betas2_mp_known %>% mutate(model = "Mixed Poisson known A")
+  
+  # bind into one
+  beta2_all <- bind_rows(df1, df2)
+  
+  # dodged box‐plot
+  ret$beta2_plot <- ggplot(beta2_all, aes(x = factor(t), y = V1, fill = model)) +
+    # true parameter line + points
+    geom_line(
+      aes(x = factor(t), y = beta2_true, group = 1),
+      inherit.aes = FALSE,
+      color       = "black",
+      size        = 1,
+      alpha = 0.5
+    ) +
+    geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
+    stat_boxplot(geom = "errorbar", 
+                 position = position_dodge(width = 0.8), 
+                 width = 0.2) + 
+    labs(
+      x     = "Time (t)",
+      y     = latex2exp::TeX("$a_{1,1}$ estimate"),
+      fill  = "Model spec",
+      title = latex2exp::TeX("$a_{1,1}$ over time, by model")
+    )  +
+    theme_minimal(base_size = 24) +
+    theme(
+      plot.title   = element_text(hjust = 0.5),
+      axis.text.x  = element_text(angle = 45, vjust = 0.5)
+    )
+  
+  
+  return(ret)
 }
 
 

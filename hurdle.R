@@ -20,7 +20,7 @@ log_dHP_der <- function(x,mu,prop, z){
 }
 
 
-Q_hurdle <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, prop){
+Q_hurdle <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, prop, a_known = FALSE ){
   
   
   etheta <- as.numeric(etheta)
@@ -32,10 +32,15 @@ Q_hurdle <- function(param, locs, claims, exposure, X_mat, agg_claims, years, et
     beta1 <- param[1:ncol(X_mat)]
     psi <- param[(ncol(X_mat)+1):(length(param))]
     a <- 1
-  }else if(model_type == "learn_graph"){
+  }else if(model_type == "learn_graph" & !a_known){
     beta1 <- param[1:ncol(X_mat)]
     a <- param[(ncol(X_mat)+1):(length(param))]
     A <- get_W_from_array(a, p)
+    psi <- NA
+  }
+  
+  if(a_known){
+    beta1 <- param[1:ncol(X_mat)]
     psi <- NA
   }
   
@@ -51,7 +56,7 @@ Q_hurdle <- function(param, locs, claims, exposure, X_mat, agg_claims, years, et
 }
 
 
-Q_hurdle_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, prop){
+Q_hurdle_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, prop, a_known = FALSE){
   
   etheta <- as.numeric(etheta)
   
@@ -62,10 +67,16 @@ Q_hurdle_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, yea
     beta1 <- param[1:ncol(X_mat)]
     psi <- param[(ncol(X_mat)+1):(length(param))]
     a <- 1
-  }else if(model_type == "learn_graph"){
+  }else if(model_type == "learn_graph" & !a_known){
     beta1 <- param[1:ncol(X_mat)]
     a <- param[(ncol(X_mat)+1):(length(param))]
     A <- get_W_from_array(a, p)
+    psi <- NA
+  }
+  
+  
+  if(a_known){
+    beta1 <- param[1:ncol(X_mat)]
     psi <- NA
   }
   
@@ -129,6 +140,10 @@ Q_hurdle_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, yea
       
     }
     
+    if(a_known){
+      g22 <- c()
+    }
+    
     grad <- c(g1, g22)
   }
   
@@ -146,7 +161,7 @@ Q_hurdle_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, yea
 
 
 
-hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0, nr_em = 100, max_itr = 1000){
+hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0, nr_em = 100, max_itr = 1000, a_known = FALSE){
   
   
   p <- length(unique(locs))
@@ -155,7 +170,7 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
   beta1 <- glm(claims ~ -1 + X1 + offset(log(exposure)), family = 'poisson')$coefficients
   prop <- mean(claims == 0)
   
-  if(model_type == "learn_graph"){
+  if(model_type == "learn_graph" & !a_known){
     a <- rep(1,p*(p+1)/2)*0.001
     A <- get_W_from_array(a, p)
     lower_a <- rep(1e-4, p*(p+1)/2)
@@ -176,10 +191,15 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
     theta0 <- c(beta1, psi)
     lower <- c(rep(-20,ncol(X1)), rep(1e-8, p))
     upper <-  c(rep(Inf,ncol(X1)+p))
-  }else if(model_type == "learn_graph"){
+  }else if(model_type == "learn_graph" & !a_known){
     theta0 <- c(beta1, a)
     lower <- c(rep(-20,ncol(X1)), rep(1e-8, p*(p+1)/2))
     upper <-  c(rep(Inf,ncol(X1)+p*(p+1)/2))
+    psi <- NA
+  }else if(a_known){
+    theta0 <- c(beta1)
+    lower <- c(rep(-20,ncol(X1)))
+    upper <-  c(rep(Inf,ncol(X1)))
     psi <- NA
   }else{
     stop("model type not known")
@@ -211,6 +231,7 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
                model_type = model_type,
                lambda = lambda,
                p = p,
+               a_known = a_known,
                prop = prop,
                method = 'L-BFGS-B',
                control = list(maxit = max_itr),
@@ -224,10 +245,13 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
   }else if(model_type == "learn_psi"){
     beta1 <- out$par[1:ncol(X1)]
     psi <- out$par[(ncol(X1)+1):(length(out$par))]
-  }else if(model_type == "learn_graph"){
+  }else if(model_type == "learn_graph" & !a_known ){
     beta1 <- out$par[1:ncol(X1)]
     a <- out$par[(ncol(X1)+1):(length(out$par))]
     A <- get_W_from_array(a, p)
+  }else if(a_known){
+    beta1 <- out$par[1:ncol(X1)]
+    a <- A[upper.tri(A, TRUE)]
   }
 
   
@@ -238,36 +262,6 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
   
 }
 
-
-
-source("simulate_data.R")
-
-data_sim <- simulate_hurdle_claims(100, 200, "psi", TRUE, mixing = "none")
-
-# Extract variables from simulation
-claims <- data_sim$claims
-X <- data_sim$X
-years <- data_sim$years
-locs <- data_sim$locs
-agg_claims <- data_sim$agg_claims
-A <- data_sim$A
-exposure <- data_sim$exposure
-model_type <- "learn_psi"
-additive <- TRUE
-mixing <- "none"
-
-
-# Initialize parameters
-out_hurdle <- hurdle(data_sim$claims, data_sim$X, data_sim$locs, data_sim$years,  data_sim$agg_claims, 
-               data_sim$A, additive, model_type, exposure = data_sim$exposure,  lambda = 0, max_itr = 300)
-
-out_hurdle$optim_obj$message
-
-data_sim$psi
-out_hurdle$psi
-
-15*data_sim$a
-out_hurdle$a
 
 
 

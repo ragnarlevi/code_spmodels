@@ -169,7 +169,7 @@ do_poisson_lambda <- function(density, id){
   A <- sim$A
   
   
-  lambdas <- c(0, 0.5, 1, 2.5, 5, 7, 10, 25, 50, 75, 100)
+  lambdas <- c(0, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7, 10, 25, 50, 75, 100)
   additive <- FALSE
   for(lambda in lambdas){
     for(t in c(10, 50, 100, 200)){

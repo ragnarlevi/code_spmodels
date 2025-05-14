@@ -150,8 +150,13 @@ zzip_log_lik_function <- Vectorize(zzip_log_lik_function, vectorize.args = c("y"
 zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, Emethod = "integration",
                          n_iter = 100, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, control_list = list(), do_optim = FALSE, a_known = FALSE){
+                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, control_list = list(), do_optim = FALSE, a_known = FALSE, calc_se = TRUE){
   
+  
+  
+  if(a_known & do_optim){
+    stop("Optim with a_known = TRUE, not supported")
+  }
   
   # Start by defining two functions that go into the optim base package to
   # 1. Perform L-BFGS-B method
@@ -629,7 +634,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
       }
       if(log_lik < log_lik_old){
         
-        print("There is a decrease in the likelihood. Some numerical instabilities occuring. Changing step siz. Change SGD batch if using SGD.")
+        print("There is a decrease in the likelihood. Some numerical instabilities occuring. Change step sizes or SGD batch if using SGD.")
       }
       
     }
@@ -688,167 +693,174 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   # Finalize 
   # Hessian
-  y <- claims
-
-  if(model_type == "learn_graph"){
-    Hessian <- optimHess(c(beta_phi_est, pi_est, beta_est, a_est), fn = beta_optim, gr = beta_optim_grad)
-  }else if (model_type == "learn_psi"){
-    Hessian <- optimHess(c(beta_phi_est, pi_est, beta_est, psi_est), fn = beta_optim, gr = beta_optim_grad)
-  }
   
-  # Variance
-  
-  grad_mu_sq <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                           h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi)^2, likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
-                           mu_old = mu, phi_old = phi, method = "integration")
-  
-  grad_phi_sq <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi)^2, likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
-                            mu_old = mu, phi_old = phi, method = "integration")
-  
-  grad_pi_sq <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu, phi) h_pi_func(z, y, pi, mu, phi)^2, likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
-                            mu_old = mu, phi_old = phi, method = "integration")
-  
-  
-  
-  grad_mu_phi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi)* deriv_log_density(z, phi), likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
-                            mu_old = mu, phi_old = phi, method = "integration")
-  
-  grad_mu_pi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                            h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi)* h_pi_func(z, y, pi, mu, phi), likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
-                            mu_old = mu, phi_old = phi, method = "integration")
-  
-  grad_phi_pi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                           h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi)* h_pi_func(z, y, pi, mu, phi), likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
-                           mu_old = mu, phi_old = phi, method = "integration")
-  
-  
-  
-  
-  
-  a_known <- FALSE
-  if(a_known){
-    W11 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
-  }else if(model_type == "learn_graph"){
-    W11 <- matrix(0, nrow = ncol(X)+2 + length(a_est), ncol = ncol(X)+2+ length(a_est))
-  }else if(model_type == "learn_psi"){
-    W11 <- matrix(0, nrow = ncol(X)+2 + length(psi_est), ncol = ncol(X)+2+ length(psi_est))
-  }else{
-    W11 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
-  }
-  
-  for(i in 1:nrow(X)){
+  if(calc_se){
+    y <- claims
     
-    g1 <- get_grad_beta(additive, 1, nu[i], exposure[i], X[i, , drop = FALSE], se$spatial_effect[i], locs[i])
+    if(model_type == "learn_graph"){
+      Hessian <- optimHess(c(beta_phi_est, pi_est, beta_est, a_est), fn = beta_optim, gr = beta_optim_grad)
+    }else if (model_type == "learn_psi"){
+      Hessian <- optimHess(c(beta_phi_est, pi_est, beta_est, psi_est), fn = beta_optim, gr = beta_optim_grad)
+    }
+    
+    # Variance
+    
+    grad_mu_sq <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                             h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi)^2, likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
+                             mu_old = mu, phi_old = phi, method = "integration")
+    
+    grad_phi_sq <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                              h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi)^2, likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
+                              mu_old = mu, phi_old = phi, method = "integration")
+    
+    grad_pi_sq <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                             h_func = function(z, y, pi, mu, phi) h_pi_func(z, y, pi, mu, phi)^2, likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
+                             mu_old = mu, phi_old = phi, method = "integration")
+    
+    
+    
+    grad_mu_phi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                              h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi)* deriv_log_density(z, phi), likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
+                              mu_old = mu, phi_old = phi, method = "integration")
+    
+    grad_mu_pi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                             h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi)* h_pi_func(z, y, pi, mu, phi), likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
+                             mu_old = mu, phi_old = phi, method = "integration")
+    
+    grad_phi_pi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                              h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi)* h_pi_func(z, y, pi, mu, phi), likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0,
+                              mu_old = mu, phi_old = phi, method = "integration")
+    
+    
+    
+    
+    
+    a_known <- FALSE
+    if(a_known){
+      W11 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
+    }else if(model_type == "learn_graph"){
+      W11 <- matrix(0, nrow = ncol(X)+2 + length(a_est), ncol = ncol(X)+2+ length(a_est))
+    }else if(model_type == "learn_psi"){
+      W11 <- matrix(0, nrow = ncol(X)+2 + length(psi_est), ncol = ncol(X)+2+ length(psi_est))
+    }else{
+      W11 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
+    }
+    
+    for(i in 1:nrow(X)){
+      
+      g1 <- get_grad_beta(additive, 1, nu[i], exposure[i], X[i, , drop = FALSE], se$spatial_effect[i], locs[i])
+      
+      if(a_known){
+        g22 <- c()
+      }else if(model_type == "learn_graph"){
+        g22 <- get_grad_a_2(additive, 1, agg_claims, years[i],locs[i], exposure[i], nu[i], lambda, nr_regions)
+      }else if(model_type == "learn_psi"){
+        g22 <- get_grad_psi_2(additive, 1, se$agg_effect[i], nu[i], exposure[i], locs[i], nr_regions)
+      }else{
+        g22 <- c()
+      }
+      
+      
+      
+      u1 <- grad_mu_sq[i] * outer(c(g1, g22), c(g1, g22))
+      u2 <- grad_phi_sq[i]
+      u3 <- grad_mu_phi[i] * c(g1, g22)
+      u4 <- grad_pi_sq[i]
+      u5 <- grad_mu_pi[i] * c(g1, g22)
+      u6 <- grad_phi_pi[i]
+      
+      
+      
+      W11[1,1] <-  W11[1,1] + u2
+      
+      W11[1,2] <- W11[1,2] + u6
+      W11[2,1] <- W11[2,1] + u6
+      
+      W11[1,3:ncol(W11)] <- W11[1,3:ncol(W11)] + u3
+      W11[3:ncol(W11), 1] <-  W11[3:ncol(W11), 1] + u3
+      
+      W11[2,2] <- W11[2,2] + u4
+      
+      W11[2,3:ncol(W11)] <-  W11[2,3:ncol(W11)] + u5
+      W11[3:ncol(W11), 2] <-  W11[3:ncol(W11), 2] + u5
+      
+      
+      W11[3:ncol(W11), 3:ncol(W11)] <- W11[3:ncol(W11), 3:ncol(W11)] + u1
+      
+    }
+    
+    
+    grad_mu <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                          h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi), likelihood_func = zip_likelihood_func,
+                          special_case = FALSE, special_fun = 0, method = "integration")
+    
+    grad_phi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                           h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi),
+                           likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0, method = "integration")
+    
+    grad_pi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
+                          h_func = function(z, y, pi, mu, phi) h_pi_func(z, y, pi, mu, phi),
+                          likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0, method = "integration")
+    
+    
     
     if(a_known){
-      g22 <- c()
+      W22 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
     }else if(model_type == "learn_graph"){
-      g22 <- get_grad_a_2(additive, 1, agg_claims, years[i],locs[i], exposure[i], nu[i], lambda, nr_regions)
+      W22 <- matrix(0, nrow = ncol(X)+2 + length(a_est), ncol = ncol(X)+2+ length(a_est))
     }else if(model_type == "learn_psi"){
-      g22 <- get_grad_psi_2(additive, 1, se$agg_effect[i], nu[i], exposure[i], locs[i], nr_regions)
+      W22 <- matrix(0, nrow = ncol(X)+2 + length(psi_est), ncol = ncol(X)+2+ length(psi_est))
     }else{
-      g22 <- c()
+      W22 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
+    }
+    
+    for(i in 1:nrow(X)){
+      
+      g1 <- get_grad_beta(additive, 1, nu[i], exposure[i], X[i, , drop = FALSE], se$spatial_effect[i], locs[i])
+      
+      if(a_known){
+        g22 <- c()
+      }else if(model_type == "learn_graph"){
+        g22 <- get_grad_a_2(additive, 1, agg_claims, years[i],locs[i], exposure[i], nu[i], 0, nr_regions)
+      }else if(model_type == "learn_psi"){
+        g22 <- get_grad_psi_2(additive, 1, se$agg_effect[i], nu[i], exposure[i], locs[i], nr_regions)
+      }else{
+        g22 <- c()
+      }
+      
+      u1 <- grad_mu[i]^2 * outer(c(g1, g22), c(g1, g22))
+      u2 <- (grad_phi[i])^2
+      u3 <- grad_mu[i]*grad_phi[i] * c(g1, g22)
+      
+      u4 <- grad_pi[i]^2
+      u5 <- grad_mu[i]*grad_pi[i] * c(g1, g22)
+      u6 <- grad_pi[i] * grad_phi[i]
+      
+      W22[1,1] <-  W22[1,1] + u2
+      
+      W22[1,2] <-  W22[1,2] + u6
+      W22[2,1] <-  W22[2,1] + u6
+      
+      W22[1,3:ncol(W22)] <- W22[1,3:ncol(W22)] + u3
+      W22[3:ncol(W22), 1] <-  W22[3:ncol(W22), 1] + u3
+      
+      W22[2,2] <- W22[2,2] + u4
+      
+      W22[2,3:ncol(W22)] <-  W22[2,3:ncol(W22)] + u5
+      W22[3:ncol(W22), 2] <-  W22[3:ncol(W22), 2] + u5
+      
+      W22[3:ncol(W22), 3:ncol(W22)] <- W22[3:ncol(W22), 3:ncol(W22)] + u1
+      
     }
     
     
     
-    u1 <- grad_mu_sq[i] * outer(c(g1, g22), c(g1, g22))
-    u2 <- grad_phi_sq[i]
-    u3 <- grad_mu_phi[i] * c(g1, g22)
-    u4 <- grad_pi_sq[i]
-    u5 <- grad_mu_pi[i] * c(g1, g22)
-    u6 <- grad_phi_pi[i]
-    
-    
-    
-    W11[1,1] <-  W11[1,1] + u2
-    
-    W11[1,2] <- W11[1,2] + u6
-    W11[2,1] <- W11[2,1] + u6
-    
-    W11[1,3:ncol(W11)] <- W11[1,3:ncol(W11)] + u3
-    W11[3:ncol(W11), 1] <-  W11[3:ncol(W11), 1] + u3
-    
-    W11[2,2] <- W11[2,2] + u4
-    
-    W11[2,3:ncol(W11)] <-  W11[2,3:ncol(W11)] + u5
-    W11[3:ncol(W11), 2] <-  W11[3:ncol(W11), 2] + u5
-    
-    
-    W11[3:ncol(W11), 3:ncol(W11)] <- W11[3:ncol(W11), 3:ncol(W11)] + u1
-    
-  }
-  
-  
-  grad_mu <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                        h_func = function(z, y, pi, mu, phi) h_mu_func(z, y, pi, mu, phi), likelihood_func = zip_likelihood_func,
-                        special_case = FALSE, special_fun = 0, method = "integration")
-  
-  grad_phi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                         h_func = function(z, y, pi, mu, phi) deriv_log_density(z, phi),
-                         likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0, method = "integration")
-  
-  grad_pi <- expected_h(y = y, phi = phi, pi = pi_est, mu = mu, z_density = z_density, 
-                         h_func = function(z, y, pi, mu, phi) h_pi_func(z, y, pi, mu, phi),
-                         likelihood_func = zip_likelihood_func, special_case = FALSE, special_fun = 0, method = "integration")
-  
-  
-  
-  if(a_known){
-    W22 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
-  }else if(model_type == "learn_graph"){
-    W22 <- matrix(0, nrow = ncol(X)+2 + length(a_est), ncol = ncol(X)+2+ length(a_est))
-  }else if(model_type == "learn_psi"){
-    W22 <- matrix(0, nrow = ncol(X)+2 + length(psi_est), ncol = ncol(X)+2+ length(psi_est))
+    var_loglik <- W11-W22
   }else{
-    W22 <- matrix(0, nrow = ncol(X)+2, ncol = ncol(X)+2)
+    Hessian <- NA
+    var_loglik <- NA
   }
   
-  for(i in 1:nrow(X)){
-    
-    g1 <- get_grad_beta(additive, 1, nu[i], exposure[i], X[i, , drop = FALSE], se$spatial_effect[i], locs[i])
-    
-    if(a_known){
-      g22 <- c()
-    }else if(model_type == "learn_graph"){
-      g22 <- get_grad_a_2(additive, 1, agg_claims, years[i],locs[i], exposure[i], nu[i], 0, nr_regions)
-    }else if(model_type == "learn_psi"){
-      g22 <- get_grad_psi_2(additive, 1, se$agg_effect[i], nu[i], exposure[i], locs[i], nr_regions)
-    }else{
-      g22 <- c()
-    }
-    
-    u1 <- grad_mu[i]^2 * outer(c(g1, g22), c(g1, g22))
-    u2 <- (grad_phi[i])^2
-    u3 <- grad_mu[i]*grad_phi[i] * c(g1, g22)
-    
-    u4 <- grad_pi[i]^2
-    u5 <- grad_mu[i]*grad_pi[i] * c(g1, g22)
-    u6 <- grad_pi[i] * grad_phi[i]
-    
-    W22[1,1] <-  W22[1,1] + u2
-    
-    W22[1,2] <-  W22[1,2] + u6
-    W22[2,1] <-  W22[2,1] + u6
-    
-    W22[1,3:ncol(W22)] <- W22[1,3:ncol(W22)] + u3
-    W22[3:ncol(W22), 1] <-  W22[3:ncol(W22), 1] + u3
-    
-    W22[2,2] <- W22[2,2] + u4
-    
-    W22[2,3:ncol(W22)] <-  W22[2,3:ncol(W22)] + u5
-    W22[3:ncol(W22), 2] <-  W22[3:ncol(W22), 2] + u5
-    
-    W22[3:ncol(W22), 3:ncol(W22)] <- W22[3:ncol(W22), 3:ncol(W22)] + u1
-    
-  }
-  
-  
-  
-  var_loglik <- W11-W22
   
   return(list(beta1 = beta_est, pi = pi_est, a = a_est, psi = psi_est, beta2 = beta_phi_est, mu = mu, Hessian = Hessian, log_lik = log_lik, var_loglik = var_loglik ))
   
@@ -858,9 +870,9 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
 #########################
 # 4. Test
 #########################
-# n <- 100
-# t <- 40
-# data_sim <- simulate_claims(n, t, "graph", TRUE, mixing = "ln", model_type = "zip",  exposure_lambda = 0)
+# n <- 50
+# t <- 10
+# data_sim <- simulate_claims(n, t, "graph", FALSE, mixing = "ig", model_type = "zip",  exposure_lambda = 0, area = 10, seed = 1)
 # 
 # # Extract variables from simulation
 # claims <- data_sim$claims
@@ -871,17 +883,17 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
 # A <- data_sim$A
 # exposure <- data_sim$exposure
 # model_type <- "learn_graph"
-# additive <- TRUE
-# mixing <- "ln"
-
-
-# out_zip <- zip(claims, X, locs, years,  agg_claims, 
-#                A, additive, model_type, lambda = 0, exposure = exposure, max_itr = 300)
-
+# additive <- FALSE
+# mixing <- "ig"
+# 
+# 
+# # out_zip <- zip(claims, X, locs, years,  agg_claims,
+# #                A, additive, model_type, lambda = 0, exposure = exposure, max_itr = 300)
+# 
 # out <- zip_mixed (claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing,  Emethod = "integration",
-#               n_iter = 50, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",
+#               n_iter = 10, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",
 #               optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-#               batch_size = 100, verbose = 2, do_optim = FALSE)
+#               batch_size = 100, verbose = 2, do_optim = FALSE, calc_se = FALSE)
 
 # sum(abs(out_zip$beta1 - data_sim$beta1))
 # sum(abs(out$beta1 - data_sim$beta1))
