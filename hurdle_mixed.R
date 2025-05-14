@@ -824,29 +824,29 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
 #########################
 # 4. Test
 #########################
-source("simulate_data.R")
-data_sim <- simulate_claims(50, 50, "graph", TRUE, mixing = "ln", model_type = "hurdle",  exposure_lambda = 0)
-
-# Extract variables from simulation
-claims <- data_sim$claims
-X <- data_sim$X
-years <- data_sim$years
-locs <- data_sim$locs
-agg_claims <- data_sim$agg_claims
-A <- data_sim$A
-exposure <- data_sim$exposure
-model_type <- "learn_graph"
-additive <- TRUE
-mixing <- "ln"
-
-
-
-out <- hurdle_mixed (claims = claims, X = X, years = years, locs = locs, agg_claims = agg_claims, A = A, exposure = exposure, 
-                     model_type = model_type,additive =  additive, mixing = mixing, 
-                         n_iter = 50, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
-                         optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE, Q_tol = 1E-6,
-                         batch_size = 100, param_tol = 1e-9, verbose = 2,  do_optim = FALSE, calc_se = FALSE, a_known = TRUE)
-
-diag(solve(out$Hessian - out$var_loglik))
+# source("simulate_data.R")
+# data_sim <- simulate_claims(50, 50, "graph", TRUE, mixing = "ln", model_type = "hurdle",  exposure_lambda = 0)
+# 
+# # Extract variables from simulation
+# claims <- data_sim$claims
+# X <- data_sim$X
+# years <- data_sim$years
+# locs <- data_sim$locs
+# agg_claims <- data_sim$agg_claims
+# A <- data_sim$A
+# exposure <- data_sim$exposure
+# model_type <- "learn_graph"
+# additive <- TRUE
+# mixing <- "ln"
+# 
+# 
+# 
+# out <- hurdle_mixed (claims = claims, X = X, years = years, locs = locs, agg_claims = agg_claims, A = A, exposure = exposure, 
+#                      model_type = model_type,additive =  additive, mixing = mixing, 
+#                          n_iter = 50, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
+#                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE, Q_tol = 1E-
+#                          batch_size = 100, param_tol = 1e-9, verbose = 2,  do_optim = FALSE, calc_se = FALSE, a_known = TRUE)
+# 
+# diag(solve(out$Hessian - out$var_loglik))
 
 
