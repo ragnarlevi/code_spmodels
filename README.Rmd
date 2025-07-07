@@ -1,0 +1,229 @@
+---
+title: "ReadMe"
+output: html_document
+---
+
+
+# code_spmodels
+
+The code requires the package [tidyverse](https://www.tidyverse.org/) to be installed: `install.packages("tidyverse")`.
+
+
+
+## Run the models
+```{r, warning=FALSE, message=FALSE}
+source("utils.R")  # gradients and helper functions
+source("poisson.R")  # All Poisson models models
+source("zip_mixed.R")  # Zip and mixed zip models
+source("hurdle_mixed.R") # hurdle and mixed hurdle models
+source("simulate_data.R")  # to gernerate data
+
+
+#####################
+# Test Poisson
+#####################
+# Poisson is purely L-BFGS-B
+sim <- simulate_claims(50, 100, spatial_type = "graph", additive =  FALSE, area = 10, 
+                           model_type = "poisson", mixing = "gamma", density = 0.4,  seed = 1)
+
+out_poisson <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, additive = FALSE, model_type = "learn_graph", 
+                       lambda = 0, 
+                       exposure = sim$exposure, 
+                       max_itr = 500)
+
+out_poisson_mixed <- Poisson_mixed(claims = sim$claims, 
+                           X = sim$X, 
+                           locs = sim$locs, 
+                           years = sim$years, 
+                           agg_claims = sim$agg_claims,
+                           A = sim$A,   # can be NA if A is learned
+                           additive = FALSE, 
+                           model_type = "learn_graph", 
+                           lambda = 0,
+                           exposure = sim$exposure,  
+                           mixing_var = "gamma", 
+                            Q_tol = 0,
+                           nr_em = 60,
+                           verbose = 0  # increase number for info
+                           )
+
+# Louis method error, first few parameters
+sqrt(diag(solve(out_poisson_mixed$Hessian-out_poisson_mixed$var_loglik)))[1:5]
+
+# Beta error
+cat("\n# Beta Error\n")
+cat("Poisson model beta1 error:", sum(abs(out_poisson$beta1 - sim$beta1)), "\n")
+cat("Poisson mixed model beta1 error:", sum(abs(out_poisson_mixed$beta1 - sim$beta1)), "\n")
+
+# Alpha error
+cat("\n# Alpha Error\n")
+cat("Poisson model a error:", sum(abs(out_poisson$a - sim$a)), "\n")
+cat("Poisson mixed model a error:", sum(abs(out_poisson_mixed$a - sim$a)), "\n")
+
+# Beta_phi error
+cat("\n# Beta_phi Error\n")
+cat("Poisson mixed model beta phi error:", sum(abs(out_poisson_mixed$beta2 - sim$beta2)), "\n")
+
+
+#####################
+# Test Zip
+#####################
+source("zip_mixed.R")  # Zip and mixed zip models
+zip_sim <- simulate_claims(50, 100, spatial_type = "graph", additive =  TRUE, area = 10, 
+                           model_type = "zip", mixing = "ln", density = 0.4,  seed = 1)
+
+# not mixed
+out_zip <- zip(claims = zip_sim$claims, X1 = zip_sim$X, locs = zip_sim$locs, 
+               years = zip_sim$years,  agg_claims = zip_sim$agg_claims, 
+                 A = zip_sim$A, additive = TRUE, 
+                model_type = "learn_graph", 
+               exposure = zip_sim$exposure, 
+                 lambda = 0, max_itr = 500)
+# mixed
+out_zip_mixed <- zip_mixed (claims = zip_sim$claims, X = zip_sim$X, years = zip_sim$years, locs = zip_sim$locs, agg_claims = zip_sim$agg_claims, 
+                            A = zip_sim$A,  # can be NA in this case (is ignoted when A is learned)
+                            exposure = zip_sim$exposure, model_type = "learn_graph", additive = TRUE, mixing = "ln",  
+                            Emethod = "integration",
+                            n_iter = 100, 
+                            lambda = 0, 
+                            optimizer_beta = "gd", optimizer_psi = "gd",
+                            optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd",  # use gradient descent for each parameter
+                            sgd = FALSE,  # can allow stochastic gradient but EM not guaranteed to take the correct step
+                            batch_size = 100, # only used if sgd is true
+                            verbose = 0, 
+                            do_optim = FALSE,   # generally slower
+                            calc_se = TRUE,
+                            beta2_start = 0,   # takes some time
+                            control_list = list(a = list(lr = 0.001),  # set learning rate, too high can lead to a decrease in lkelihood
+                                                  beta_phi  = list(lr = 0.0001)),
+                            max_itr_poisson = 500  # max number of iterations to start Poisson
+                            )
+# Louis method error
+sqrt(diag(solve(out_zip_mixed$Hessian-out_zip_mixed$var_loglik)))[1:5]
+
+# Beta error
+cat("\n# Beta Error\n")
+cat("Poisson model beta1 error:", sum(abs(out_zip$beta1 - zip_sim$beta1)), "\n")
+cat("Poisson mixed model beta1 error:", sum(abs(out_zip_mixed$beta1 - zip_sim$beta1)), "\n")
+
+# Alpha error
+cat("\n# Alpha Error\n")
+cat("Poisson model a error:", sum(abs(out_zip$a - zip_sim$a)), "\n")
+cat("Poisson mixed model a error:", sum(abs(out_zip_mixed$a - zip_sim$a)), "\n")
+
+# Beta_phi error
+cat("\n# Beta_phi Error\n")
+cat("Poisson mixed model beta2 error:", sum(abs(out_zip_mixed$beta2 - zip_sim$beta2)), "\n")
+
+
+
+#####################
+# Test Zip psi
+#####################
+
+# We can also fit a model where A is known
+zip_sim_psi <- simulate_claims(50, 100, spatial_type = "psi", additive =  TRUE, area = 10, 
+                           model_type = "zip", mixing = "ln", density = 0.4,  seed = 1)
+
+# not mixed
+out_zip_psi <- zip(claims = zip_sim_psi$claims, X1 = zip_sim_psi$X, locs = zip_sim_psi$locs, 
+               years = zip_sim_psi$years,  agg_claims = zip_sim_psi$agg_claims, 
+                 A = zip_sim_psi$A, additive = TRUE, 
+                model_type = "learn_psi", 
+               exposure = zip_sim_psi$exposure, 
+                 lambda = 0, max_itr = 500)
+# mixed
+out_zip_psi_mixed <- zip_mixed (claims = zip_sim_psi$claims, X = zip_sim_psi$X, years = zip_sim_psi$years, 
+                                locs = zip_sim_psi$locs, 
+                                agg_claims = zip_sim_psi$agg_claims, 
+                                A = zip_sim_psi$A,   # has to be given when psi is learned
+                                exposure = zip_sim_psi$exposure, model_type = "learn_psi", additive = TRUE, mixing = "ln",  
+                                Emethod = "integration",
+                                n_iter = 30, 
+                                lambda = 0, # not used when psi is learned
+                                verbose = 0, # set to 2 for convergence info
+                                do_optim = FALSE,   # generally slower to use the L_BFGS within the EM.
+                                calc_se = TRUE,
+                                beta2_start = 0.1,   
+                                control_list = list(psi = list(lr = 0.0001),  # set learning rate, too high can lead to a decrease in likelihood
+                                                      beta_phi  = list(lr = 0.00001),
+                                                    beta = list(lr = 0.0001),
+                                                    pi = list(lr = 0.00001)),
+                                max_itr_poisson = 100  # max number of iterations to start Poisson
+                            )
+# Louis method error
+sqrt(diag(solve(out_zip_psi_mixed$Hessian-out_zip_psi_mixed$var_loglik)))
+
+# Beta error
+cat("\n# Beta Error\n")
+cat("ZIP psi model beta1 error:", sum(abs(out_zip_psi$beta1 - zip_sim_psi$beta1)), "\n")
+cat("ZIP psi mixed model beta1 error:", sum(abs(out_zip_psi_mixed$beta1 - zip_sim_psi$beta1)), "\n")
+
+# Alpha error
+cat("\n# Alpha Error\n")
+cat("ZIP psi model a error:", sum(abs(out_zip_psi$psi - zip_sim_psi$psi)), "\n")
+cat("ZIP psi mixed model a error:", sum(abs(out_zip_psi_mixed$psi - zip_sim_psi$psi)), "\n")
+
+# Beta_phi error
+cat("\n# Beta_phi Error\n")
+cat("ZIP psi mixed model beta2 error:", sum(abs(out_zip_psi_mixed$beta2 - zip_sim_psi$beta2)), "\n")
+
+
+
+#####################
+# Test Zip psi
+#####################
+
+# Test mixed hurdle
+source("hurdle_mixed.R")  # Zip and mixed zip models
+hurdle_sim <- simulate_claims(50, 100, spatial_type = "graph", additive =  TRUE, area = 10, 
+                           model_type = "hurdle", mixing = "ig", density = 0.4,  seed = 1)
+
+out_hurdle <- hurdle(hurdle_sim$claims, hurdle_sim$X, hurdle_sim$locs, hurdle_sim$years,  hurdle_sim$agg_claims, 
+                 hurdle_sim$A, TRUE, "learn_graph", lambda = 0, exposure = hurdle_sim$exposure, max_itr = 500)
+
+out_hurdle_mixed <- hurdle_mixed (claims = hurdle_sim$claims, X = hurdle_sim$X, years = hurdle_sim$years, locs = hurdle_sim$locs, agg_claims = hurdle_sim$agg_claims, 
+                            A = hurdle_sim$A, exposure = hurdle_sim$exposure, model_type = "learn_graph", additive = TRUE, mixing = "ig",  
+                            Emethod = "integration",
+                            n_iter = 60, 
+                            lambda = 0, 
+                            optimizer_beta = "gd", optimizer_psi = "gd",
+                            optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd",  # use gradient descent for each parameter
+                            sgd = FALSE,  # can allow stochastic gradient but EM not guaranteed to take the correct step
+                            batch_size = 100, 
+                            verbose = 2, 
+                            do_optim = FALSE,   # generally slower
+                            calc_se = TRUE,
+                            beta2_start = 0.2,   # takes some time
+                            control_list = list(psi = list(a = 0.000001),  # set learning rate, too high can lead to a decrease in likelihood
+                                                  beta_phi  = list(lr = 0.0001),
+                                                beta = list(lr = 0.1)),
+                            max_itr_poisson = 100  # number of iterations to start Poisson
+                            )
+
+# Louis method error
+sqrt(diag(solve(out_hurdle_mixed$Hessian-out_hurdle_mixed$var_loglik)))
+
+# Beta error
+cat("\n# Beta Error\n")
+cat("Hurdle model beta1 error:", sum(abs(out_hurdle$beta1 - hurdle_sim$beta1)), "\n")
+cat("Hurdle mixed model beta1 error:", sum(abs(out_hurdle_mixed$beta1 - hurdle_sim$beta1)), "\n")
+
+# Alpha error
+cat("\n# Alpha Error\n")
+cat("Hurdle model a error:", sum(abs(out_hurdle$a - hurdle_sim$a)), "\n")
+cat("Hurdle mixed model a error:", sum(abs(out_hurdle_mixed$a - hurdle_sim$a)), "\n")
+
+# Beta_phi error
+cat("\n# Beta_phi Error\n")
+cat("Hurdle mixed model beta2 error:", sum(abs(out_hurdle_mixed$beta2 - hurdle_sim$beta2)), "\n")
+
+
+
+```
+
+
+
+The experiments in the paper were run by running `poisson_test.R`, `zip_test.R`,  `hurdle_test.R`, `speed_test.R` and `test_direct_vs_em.R`, but they do take quite some time to run.
+
+

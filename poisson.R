@@ -438,7 +438,7 @@ Q_P_deriv2 <- function(param, locs, claims, exposure, X_mat, agg_claims, years, 
 
 
 # Poisson model
-Poisson <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0, nr_em = 100, max_itr = 1000, a_known = FALSE){
+Poisson <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0,  max_itr = 1000, a_known = FALSE){
   
   
   if(model_type != "learn_graph"){
@@ -532,8 +532,19 @@ Poisson <- function(claims, X1, locs, years, agg_claims, A, additive, model_type
     beta1 <- out$par
   }
   
+    
+    # Find number of params
+    if(a_known){
+      nr_param <- length(beta1) + 1
+    }else if(model_type == "learn_graph"){
+      nr_param <- length(beta1) + 1 + sum(abs(A[upper.tri(A, diag = T)]) > 1e-3)
+    }else if(model_type == "learn_psi"){
+      nr_param <- length(beta1) + 1 + length(psi)
+    }
+    
   
-  return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], beta2 = 1 , H = out$hessian, H_beta2 = NA, mu = mu, optim_obj = out, model_type = model_type))
+  return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], beta2 = 1 , H = out$hessian, H_beta2 = NA, mu = mu, 
+              optim_obj = out, model_type = model_type, nr_param = nr_param))
   
   
 }
@@ -687,47 +698,62 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
 
  
  
- zpois_log_lik_function <- function(y,  phi, pi, mu, z_density) {
-   
-   # f(y|z) for y > 0 under the zip  model:
+ library(statmod)
+ 
+ zpois_log_lik_function <- function(y, phi, pi, mu, z_density) {
+   # f(y | z)
    f_y_given_z <- function(z) {
      pois_likelihood_func(z, y, pi, mu, phi)
    }
    
-   # Numerator: integrate h(z)*f(y|z)*f(z) over z
+   # Unnormalized numerator integrand: f(y|z) * f(z)
    numerator_integrand <- function(z) {
-     f_y_given_z(z) * z_density(z, phi)
+     val <- f_y_given_z(z) * z_density(z, phi)
+     val[!is.finite(val)] <- 0
+     val
    }
    
+   # 1) Try integrate()
+   num_result <- tryCatch({
+     integrate(
+       numerator_integrand,
+       lower        = 0,
+       upper        = Inf,
+       subdivisions = 1000,
+       rel.tol      = 1e-8,
+       stop.on.error= FALSE
+     )$value
+   }, error = function(e) {
+     NA_real_
+   }, warning = function(w) {
+     NA_real_
+   })
    
-   # Get Gauss-Legendre nodes and weights on [-1,1]
-   quad <- statmod::gauss.quad(50, kind = "legendre")
-   # Transform nodes and weights to [0,1]
-   t_nodes <- (quad$nodes + 1) / 2
-   t_weights <- quad$weights / 2
-   
-   # Transformation: z = t/(1-t), dz/dt = 1/(1-t)^2.
-   z_vals   <- t_nodes / (1 - t_nodes)
-   jacobian <- 1 / (1 - t_nodes)^2
-   
-   integrand_num_vals   <- numeric(length(z_vals))
-   integrand_denom_vals <- numeric(length(z_vals))
-   
-   for (i in seq_along(z_vals)) {
-     z <- z_vals[i]
-     lik   <- f_y_given_z(z)
-     integrand_num_vals[i]   <- lik * z_density(z, phi) * jacobian[i]
+   # 2) If integrate() failed or gave NA/NaN/Inf, fall back to Gauss–Legendre
+   if (!is.finite(num_result)) {
+     quad      <- statmod::gauss.quad(50, kind = "legendre")
+     t_nodes   <- (quad$nodes + 1) / 2
+     t_weights <- quad$weights / 2
+     
+     # Transform [0,1] → [0,∞): z = t/(1-t), dz = 1/(1-t)^2 dt
+     z_vals    <- t_nodes / (1 - t_nodes)
+     jacobian  <- 1 / (1 - t_nodes)^2
+     
+     lik_vals   <- f_y_given_z(z_vals)
+     prior_vals <- z_density(z_vals, phi)
+     
+     num_result <- sum(t_weights * lik_vals * prior_vals * jacobian)
    }
-   num_quad   <- sum(t_weights * integrand_num_vals)
    
-   
-   #num_result <- integrate(numerator_integrand, lower = 1e-3, subdivisions = 1000,  upper = Inf, rel.tol = 1e-8)
-   
-   
-   #lik <- num_result$value 
-   return(num_quad)
+   num_result
  }
- zpois_log_lik_function <- Vectorize(zpois_log_lik_function, vectorize.args = c("y", "mu"))
+ 
+ # vectorize over y and mu as before
+ zpois_log_lik_function <- Vectorize(
+   zpois_log_lik_function,
+   vectorize.args = c("y", "mu")
+ )
+ 
  
  
 
@@ -735,13 +761,32 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
  Poisson_mixed <- function(claims, X, locs, years, agg_claims, A, additive, model_type, exposure, 
                           lambda = 0, param_tol = 1e-5, Q_tol = 1e-5, nr_em = 100, max_itr = 1000, 
                           mixing_var = "gamma", z= "", verbose = 0, sgd = FALSE, batch_size = 500,
-                          a_known = FALSE, control_list = list()){
+                          a_known = FALSE, control_list = list(), beta2_start = NULL){
   
-   
-   
-  
-  
-   
+
+   # claims <- Y_claims_train
+   # X <- X_mat_train
+   # locs <- locs_train
+   # years <- years_train
+   # agg_claims <- agg_claims
+   # A <- A
+   # additive <- TRUE
+   # model_type <- "learn_graph"
+   # exposure <- offset_train
+   # lambda = 0
+   # param_tol = 1e-5
+   # Q_tol = 1e-5
+   # nr_em = 100
+   # max_itr = 100
+   # mixing_var = "ig"
+   # z = ""
+   # verbose = 2
+   # sgd = FALSE
+   # control_list = list()
+   # a_known = FALSE
+   # beta2_start = NULL
+
+
   
   if(model_type != "learn_graph"){
     a_known <- FALSE
@@ -752,9 +797,13 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   
   # Set initial parameters
   out_poisson <- Poisson(claims, X, locs, years, agg_claims, A, additive, model_type, lambda = lambda, exposure, 
-                         nr_em = 100, max_itr = 1000, a_known = a_known)
+                         max_itr = max_itr, a_known = a_known)
   beta1 <- out_poisson$beta1
-  print(beta1)
+  if(verbose>0){
+    print("initial parameters:")
+    print(beta1)
+  }
+  
   
   # Compute the moment‐ratios:
   res <- claims - out_poisson$mu
@@ -790,21 +839,21 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   
   # set initial for the mixing
   if(mixing_var == "gamma"){
-    beta20 <- log(M2)#1
+    beta20 <- beta2_start%||%  1
     z_density <- gamma_density
     rzdensity <- rgamma_density
     deriv_log_density <- deriv_log_gamma_density
     Q_beta_2 <- Q_PG_beta_2
     Q_beta_2_deriv <- Q_PG_beta_2_deriv
   }else if(mixing_var == "ig"){
-    beta20 <- log(M3)#0
+    beta20 <- beta2_start %||%  0
     z_density <- ig_density
     rzdensity <- rig_density
     deriv_log_density <- deriv_log_ig_density
     Q_beta_2 <- Q_PIG_beta_2
     Q_beta_2_deriv <- Q_PIG_beta_2_deriv
   }else if(mixing_var == "ln"){
-    beta20 <- log(sqrt(log(1 + M2)))#-1
+    beta20 <- beta2_start %||%  0
     phi <- exp(beta20)
     z_density <- ln_density
     rzdensity <- rln_density
@@ -826,7 +875,6 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   log_lik <- -Inf
 
   for(iter in 1:nr_em){
-    print(iter)
     # 0. Prepare updates
 
     se <- get_spatial_aggregate(locs, A, psi, agg_claims, years, model_type)
@@ -868,6 +916,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     
     
     if(mixing_var == "gamma"){
+      
         etheta <- Etheta(claims_batch, mu_batch, phi)
         eother <- Elogtheta(claims_batch, mu_batch, phi)
 
@@ -886,6 +935,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
                           method  = "GaussLegendre")
 
     }
+
     
     ### poisson part
     out <- optim(par = theta0,
@@ -907,7 +957,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
                  scaling_factor = scaling_factor,
                  a_known = a_known,
                  method = 'L-BFGS-B',
-                 control = list(maxit = 10),
+                 control = list(maxit = 2),
                  lower = lower)
 
     ## mixing part
@@ -933,7 +983,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
       beta1 <- out$par[1:(ncol(X)+0)]
     }else if(model_type == "learn_psi"){
       beta1 <- out$par[1:(ncol(X)+0)]
-      psi <- out$par[(ncol(X)+2):length(out$par)]
+      psi <- out$par[(ncol(X)+1):length(out$par)]
     }else if(model_type == "learn_graph" & !(a_known) ){
       beta1 <- out$par[1:(ncol(X)+0)]
       a <- out$par[(ncol(X)+1):length(out$par)]
@@ -956,7 +1006,7 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
     
     
     # check convergence
-    if(isTRUE(all.equal(theta, theta0, tolerance = param_tol))){
+    if(isTRUE(all.equal(theta, theta0, tolerance = param_tol)) & isTRUE(all.equal(beta2, beta20, tolerance = param_tol)) ){
       print("Breaking because parameters have stopped changing")
       break
     }else{
@@ -1166,11 +1216,21 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
   
   var_loglik <- W11-W22
   
+  
+  # Find number of params
+  if(a_known){
+    nr_param <- length(beta1) + 1
+  }else if(model_type == "learn_graph"){
+    nr_param <- length(beta1) + 1 + sum(abs(A[upper.tri(A, diag = T)]) > 1e-3)
+  }else if(model_type == "learn_psi"){
+    nr_param <- length(beta1) + 1 + length(psi)
+  }
+  
 
 
   
   return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], beta2 = beta2 , Hessian = Hessian, mu = mu, 
-              optim_obj = out, model_type = model_type, log_lik = log_lik, var_loglik = var_loglik))
+              optim_obj = out, model_type = model_type, log_lik = log_lik, var_loglik = var_loglik, nr_param = nr_param, optim_obj_beta2 = out_beta2))
   
   
 }
@@ -1181,21 +1241,21 @@ Q_PLN_beta_2_deriv <- function(param, claims, exposure, etheta = 1, eother){
 
 ##### Test some data set ###########
 
-# sim <- simulate_claims(20, 200, "graph", FALSE, mixing = "ln", model_type = "poisson", exposure_lambda = 0)
-# 
-# 
-#  out_poisson <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", 
-#                         lambda = 0, sim$exposure, 
-#                         nr_em = 100, max_itr = 1000, a_known = FALSE)
-#  
-# beta1 <- out_poisson$beta1
-#  
-# 
-# 
-# out_mixed <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 0,
-#               exposure = sim$exposure, max_itr = 0, mixing_var = "ln", nr_em = 60,Q_tol = 0,
+# sim <- simulate_claims(50, 200, "graph", FALSE, mixing = "gamma", model_type = "poisson", exposure_lambda = 0,area = 12)
+# # 
+# # 
+# #  out_poisson <- Poisson(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph",
+# #                         lambda = 0, sim$exposure,
+# #                         nr_em = 100, max_itr = 1000, a_known = FALSE)
+# # 
+# # beta1 <- out_poisson$beta1
+# # 
+# # 
+# # 
+# out_mixed <- Poisson_mixed(sim$claims, sim$X, sim$locs, sim$years, sim$agg_claims, sim$A, FALSE, "learn_graph", lambda = 100,
+#               exposure = sim$exposure, max_itr = 0, mixing_var = "gamma", nr_em = 60,Q_tol = 0,
 #               verbose = 2, sgd = FALSE, batch_size = 100, param_tol = 0, a_known = FALSE)
-# 
+# # 
 # 
 # sum(abs(out_poisson$beta1 - sim$beta1))
 # sum(abs(out_mixed$beta1 - sim$beta1))

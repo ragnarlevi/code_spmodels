@@ -145,7 +145,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
                          n_iter = 100, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
                          batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0,  control_list = list(), do_optim = TRUE, 
-                         a_known = FALSE, calc_se = TRUE){
+                         a_known = FALSE, calc_se = TRUE, beta2_start = NULL, max_itr_poisson = 300){
   
   
   if(a_known & do_optim){
@@ -257,7 +257,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   
   
   # Initialize mixing parameters
-  beta_phi_est <- 0
+  beta_phi_est <-   beta_phi_est <- beta2_start %||% 0.3
   if(mixing == "gamma"){
     z_density <- gamma_density  
     rzdensity <- rgamma_density
@@ -285,7 +285,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   
   # Initialize parameters with non mixing Poisson
   out_hurdle <- hurdle(claims, X, locs, years,  agg_claims, 
-                 A, additive, model_type, lambda = lambda, exposure = exposure, max_itr = 300, a_known = a_known)
+                 A, additive, model_type, lambda = lambda, exposure = exposure, max_itr = max_itr_poisson, a_known = a_known, calc_hessian = FALSE)
   
 
   
@@ -294,8 +294,12 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   psi_est <- out_hurdle$psi     # psi (vector of length nr_regions)
   a_est <- out_hurdle$a
   
-  print(beta_est)
-  print(pi_est)
+  if(verbose>0){
+    print("initial parameters:")
+    print(beta_est)
+    print(pi_est)    
+  }
+
   
   
   # Default controls for gradient descent methods
@@ -311,19 +315,18 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
 
   # Set gradient descent controls 
   controls <- list()
-  print(control_list)
   controls$beta <- get_controls(optimizer_beta,  
-                                lr = control_list$beta$lr %||%  5/nrow(X), 
+                                lr = control_list[["beta", exact = TRUE]]$lr %||%  1/nrow(X), 
                                 len = d, 
-                                beta1 = control_list$beta$beta1 %||%  beta1_mom, 
-                                beta2 = control_list$beta$beta2 %||%  beta2_mom , 
+                                beta1 = control_list[["beta", exact = TRUE]]$beta1 %||%  beta1_mom, 
+                                beta2 = control_list[["beta", exact = TRUE]]$beta2 %||%  beta2_mom , 
                                 epsilon = epsilon, 
                                 iter = 1, 
-                                momentum = control_list$beta$momentum %||%  momentum )
+                                momentum = control_list[["beta", exact = TRUE]]$momentum %||%  momentum )
   
   
   controls$psi <- get_controls(optimizer_psi,  
-                               lr = control_list$psi$lr %||%  5/nr_time, 
+                               lr = control_list$psi$lr %||%  (5/nr_time), 
                                len = nr_regions, 
                                beta1 = control_list$psi$beta1 %||%  beta1_mom, 
                                beta2 = control_list$psi$beta2 %||%  beta2_mom , 
@@ -333,7 +336,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   
   
   controls$beta_phi <- get_controls(optimizer_beta_phi,  
-                                    lr = control_list$beta_phi$lr %||%  0.1/nrow(X), 
+                                    lr = control_list$beta_phi$lr %||%  (1/nrow(X)), 
                                     len = 1, 
                                     beta1 = control_list$beta_phi$beta1 %||%  beta1_mom, 
                                     beta2 = control_list$beta_phi$beta2 %||%  beta2_mom , 
@@ -342,7 +345,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
                                     momentum = control_list$beta_phi$momentum %||%  momentum )
   
   controls$a <- get_controls(optimizer_a,  
-                             lr = control_list$a$lr %||%  0.5/nr_time, 
+                             lr = control_list$a$lr %||%  (1/nr_time), 
                              len = nr_edges, 
                              beta1 = control_list$a$beta1 %||%  beta1_mom, 
                              beta2 = control_list$a$beta2 %||%  beta2_mom , 
@@ -350,9 +353,8 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
                              iter = 1, 
                              momentum = control_list$a$momentum %||%  momentum )
   
-  print(controls)
 
-  
+
   # Start the loop
   beta_nrom <- c()
   a_norm <- c()
@@ -495,6 +497,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
       }else if(model_type == "learn_psi"){
         spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
       }
+      beta_phi_converged <- isTRUE(all.equal(beta_phi_est, beta_phi_old, tolerance = param_tol))
       
     }else{
       
@@ -567,7 +570,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
       beta_phi_out <- update_gradient(optimizer_beta_phi, beta_phi_est, grad_beta_phi_total, controls$beta_phi)
       beta_phi_est <- beta_phi_out$param
       controls$beta_phi <- beta_phi_out$controls
-      
+      beta_phi_converged <- isTRUE(all.equal(beta_phi_est, beta_phi_old, tolerance = param_tol))
       
       
     }
@@ -575,7 +578,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
    
     
     # 3. Check Convergence
-    if(beta_converged & spatial_converged  ){
+    if(beta_converged & spatial_converged & beta_phi_converged  ){
       print("Breaking because parameters have stopped changing")
       break
     }
@@ -816,8 +819,19 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
   }
   
   
+  # Find number of params
+  if(a_known){
+    nr_param <- length(beta_est) + 1
+  }else if(model_type == "learn_graph"){
+    nr_param <- length(beta_est) + 1 + sum(abs(a_est) > 1e-3)
+  }else if(model_type == "learn_psi"){
+    nr_param <- length(beta_est) + 1 + length(psi_est)
+  }
   
-  return(list(beta1 = beta_est, pi = pi_est, a = a_est, psi = psi_est, beta2 = beta_phi_est, mu = mu, Hessian = Hessian, log_lik = log_lik, var_loglik = var_loglik ))
+  
+  
+  return(list(beta1 = beta_est, pi = pi_est, a = a_est, psi = psi_est, beta2 = beta_phi_est, mu = mu, Hessian = Hessian, 
+              log_lik = log_lik, var_loglik = var_loglik, nr_param = nr_param ))
 }
 
 
@@ -825,7 +839,7 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
 # 4. Test
 #########################
 # source("simulate_data.R")
-# data_sim <- simulate_claims(50, 50, "graph", TRUE, mixing = "ln", model_type = "hurdle",  exposure_lambda = 0)
+# data_sim <- simulate_claims(50, 10, "graph", TRUE, mixing = "ig", model_type = "hurdle",  exposure_lambda = 0)
 # 
 # # Extract variables from simulation
 # claims <- data_sim$claims
@@ -837,16 +851,16 @@ hurdle_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_
 # exposure <- data_sim$exposure
 # model_type <- "learn_graph"
 # additive <- TRUE
-# mixing <- "ln"
+# mixing <- "ig"
 # 
 # 
 # 
-# out <- hurdle_mixed (claims = claims, X = X, years = years, locs = locs, agg_claims = agg_claims, A = A, exposure = exposure, 
-#                      model_type = model_type,additive =  additive, mixing = mixing, 
-#                          n_iter = 50, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
-#                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE, Q_tol = 1E-
-#                          batch_size = 100, param_tol = 1e-9, verbose = 2,  do_optim = FALSE, calc_se = FALSE, a_known = TRUE)
-# 
+# out <- hurdle_mixed (claims = claims, X = X, years = years, locs = locs, agg_claims = agg_claims, A = A, exposure = exposure,
+#                      model_type = model_type,additive =  additive, mixing = mixing,
+#                          n_iter = 50, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",
+#                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE, Q_tol = 1e-9,
+#                          batch_size = 100, param_tol = 1e-9, verbose = 2,  do_optim = FALSE, calc_se = FALSE, a_known = FALSE)
+#
 # diag(solve(out$Hessian - out$var_loglik))
 
 

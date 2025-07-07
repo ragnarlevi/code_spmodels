@@ -5,7 +5,7 @@ source("utils.R")
 
 log_dHP <- function(x,mu,prop, z){
   lab <- (x==0)*1
-  lab*log(prop) + (1-lab)*(log((1-prop)) + dpois(x,mu*z, log = TRUE) - log(1- dpois(0,mu*z, log = FALSE)))
+  lab*log(prop) + (1-lab)*(log((1-prop)) + dpois(x,mu*z, log = TRUE) - log(1- dpois(0,mu*z, log = FALSE)) + 1e-8)
 }
 
 log_dHP_der <- function(x,mu,prop, z){
@@ -21,7 +21,6 @@ log_dHP_der <- function(x,mu,prop, z){
 
 
 Q_hurdle <- function(param, locs, claims, exposure, X_mat, agg_claims, years, etheta, A, additive, model_type, lambda, p, prop, a_known = FALSE ){
-  
   
   etheta <- as.numeric(etheta)
   
@@ -49,8 +48,12 @@ Q_hurdle <- function(param, locs, claims, exposure, X_mat, agg_claims, years, et
   
   mu <- get_mu(nu, se$spatial_effect, exposure, additive)
   
-  ll <- sum(log_dHP(claims, mu, prop, etheta))
+  # Compute log-likelihood
+  ll_vals <- log_dHP(claims, mu, prop, etheta)
+  if (any(!is.finite(ll_vals))) return(99999999999999)
+  if (any(!is.na(ll_vals))) return(99999999999999)
   
+  ll <- sum(ll_vals)
   return(-ll)
   
 }
@@ -161,19 +164,23 @@ Q_hurdle_deriv <- function(param, locs, claims, exposure, X_mat, agg_claims, yea
 
 
 
-hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0, nr_em = 100, max_itr = 1000, a_known = FALSE){
+hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0, max_itr = 300, a_known = FALSE, calc_hessian = TRUE){
   
   
   p <- length(unique(locs))
   
   # Set initial parameters
-  beta1 <- glm(claims ~ -1 + X1 + offset(log(exposure)), family = 'poisson')$coefficients
+  claims_tmp <- claims[claims >0]
+  X1_tmp <-  X1[claims >0, ]
+  exposure_tmp <- exposure[claims >0]
+  beta1 <- glm(claims_tmp ~ -1 + X1_tmp + offset(log(exposure_tmp)), family = 'poisson')$coefficients
   prop <- mean(claims == 0)
+
   
   if(model_type == "learn_graph" & !a_known){
-    a <- rep(1,p*(p+1)/2)*0.001
+    a <- rep(1,p*(p+1)/2)*1e-8
     A <- get_W_from_array(a, p)
-    lower_a <- rep(1e-4, p*(p+1)/2)
+    lower_a <- rep(1e-8, p*(p+1)/2)
     upper_a <- rep(0.5, p*(p+1)/2)
   }else if(model_type == "learn_psi"){
     psi <- rep(1,p)
@@ -237,7 +244,7 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
                control = list(maxit = max_itr),
                lower = lower,
                upper = upper,
-               hessian = T)
+               hessian = calc_hessian)
   
   
   if(model_type == "ordinary"){
@@ -255,9 +262,19 @@ hurdle <- function(claims, X1, locs, years, agg_claims, A, additive, model_type,
   }
 
   
+  # Find number of params
+  if(a_known){
+    nr_param <- length(beta1) + 1
+  }else if(model_type == "learn_graph"){
+    nr_param <- length(beta1) + 1 + sum(abs(A[upper.tri(A, diag = T)]) > 1e-3)
+  }else if(model_type == "learn_psi"){
+    nr_param <- length(beta1) + 1 + length(psi)
+  }
+  
+  
   return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], 
               beta2 = 1 , H = out$hessian, H_beta2 = NA, mu = mu, optim_obj = out, 
-              model_type = model_type, prop = prop))
+              model_type = model_type, prop = prop, nr_param = nr_param))
   
   
 }

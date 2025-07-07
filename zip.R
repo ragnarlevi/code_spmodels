@@ -167,7 +167,7 @@ Q_ZIP <- function(param, locs, claims, exposure, X_mat, agg_claims, years, ethet
 
  
 
-zip <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0, nr_em = 100, max_itr = 1000, a_known = FALSE){
+zip <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, exposure,  lambda = 0,  max_itr = 1000, a_known = FALSE, calc_hessian = TRUE){
   
   
   p <- length(unique(locs))
@@ -242,7 +242,7 @@ zip <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, ex
                control = list(maxit = max_itr),
                lower = lower,
                upper = upper,
-               hessian = T)
+               hessian = calc_hessian)
   
 
   if(model_type == "ordinary"){
@@ -261,9 +261,20 @@ zip <- function(claims, X1, locs, years, agg_claims, A, additive, model_type, ex
   
   prop <- out$par[length(out$par)]
   
+  
+  # Find number of params
+  if(a_known){
+    nr_param <- length(beta1) + 1
+  }else if(model_type == "learn_graph"){
+    nr_param <- length(beta1) + 1 + sum(abs(A[upper.tri(A, diag = TRUE)]) > 1e-3)
+  }else if(model_type == "learn_psi"){
+    nr_param <- length(beta1) + 1 + length(psi)
+  }
+  
+  
   return(list(beta1 = beta1, psi = psi, a = A[upper.tri(A, diag = TRUE)], 
               beta2 = 1 , H = out$hessian, H_beta2 = NA, mu = mu, optim_obj = out, 
-              model_type = model_type, prop = prop))
+              model_type = model_type, prop = prop, nr_param = nr_param))
   
   
 }

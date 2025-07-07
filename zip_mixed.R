@@ -96,7 +96,7 @@ zzip_log_lik_function <- function(y, phi, pi, mu, z_density) {
     zip_likelihood_func(z, y, pi, mu)
   }
   
-  # lik <-     integrate(
+  # lik <-     integrate(zip_likelihood_func(z, y, pi, mu)
   #   function(z) f_y_given_z(z) * z_density(z, phi),
   #   lower      = 1e-3,
   #   upper      = Inf,
@@ -150,7 +150,9 @@ zzip_log_lik_function <- Vectorize(zzip_log_lik_function, vectorize.args = c("y"
 zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing, Emethod = "integration",
                          n_iter = 100, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd", 
                          optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, control_list = list(), do_optim = FALSE, a_known = FALSE, calc_se = TRUE){
+                         batch_size = 500, param_tol = 1e-5, Q_tol = 1e-5, verbose = 0, control_list = list(), 
+                      do_optim = FALSE, a_known = FALSE, calc_se = TRUE, beta2_start = NULL,
+                      max_itr_poisson = 300){
   
   
   
@@ -273,9 +275,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
 
   
-  # Adam parameters for beta and pi
-  d <- ncol(X)  # dimension of beta
-  
+
   # Get number of regions
   nr_regions <- length(unique(locs))
   nr_edges <- nr_regions*(nr_regions+1)/2
@@ -283,12 +283,14 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   
   # Initialize parameters with non mixing Poisson
-  out_zip <- zip(claims, X, locs, years,  agg_claims, 
-                 A, additive, model_type, lambda = lambda, exposure = exposure, max_itr = 300, a_known = a_known)
-  
+  a1 <- Sys.time()
+  out_zip <- zip(claims = claims, X1 = X, locs = locs, years = years,  agg_claims = agg_claims, 
+                 A = A, additive = additive, model_type = model_type, exposure = exposure, 
+                 lambda = lambda, max_itr = max_itr_poisson, a_known = a_known,  calc_hessian = FALSE)
+  time_to_init <-  Sys.time() - a1
   
   # Initialize mixing parameters
-  beta_phi_est <- 0
+
   if(mixing == "gamma"){
     z_density <- gamma_density  
     rzdensity <- rgamma_density
@@ -302,11 +304,10 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
     rzdensity <- rig_density
     deriv_log_density <- deriv_log_ig_density
   }
-  phi <- exp(beta_phi_est)
-  
+
   
   # Initialize mixing parameters
-  beta_phi_est <- 0
+  beta_phi_est <- beta2_start %||% 0.3
   phi <- exp(beta_phi_est)
   
   beta_est <- out_zip$beta1    # beta (d-dimensional)
@@ -314,8 +315,12 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   psi_est <- out_zip$psi     # psi (vector of length nr_regions)
   a_est <- out_zip$a
   
-  print(beta_est)
-  print(pi_est)
+  if(verbose>0){
+    print("initial parameters:")
+    print(beta_est)
+    print(pi_est)    
+  }
+  
 
 
   # Adam parameters for beta and pi
@@ -331,17 +336,18 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   # Set gradient descent controls 
   controls <- list()
   controls$beta <- get_controls(optimizer_beta,  
-                                lr = control_list$beta$lr %||%  5/nrow(X), 
+                                lr = (control_list[["beta", exact = TRUE]]$lr )%||%  (1/nrow(X)), 
                                 len = d, 
-                                beta1 = control_list$beta$beta1 %||%  beta1_mom, 
-                                beta2 = control_list$beta$beta2 %||%  beta2_mom , 
+                                beta1 = control_list[["beta", exact = TRUE]]$beta1 %||%  beta1_mom, 
+                                beta2 = control_list[["beta", exact = TRUE]]$beta2 %||%  beta2_mom , 
                                 epsilon = epsilon, 
                                 iter = 1, 
-                                momentum = control_list$beta$momentum %||%  momentum )
+                                momentum = control_list[["beta", exact = TRUE]]$momentum %||%  momentum )
+
   
   
   controls$psi <- get_controls(optimizer_psi,  
-                               lr = control_list$psi$lr %||%  5/nr_time, 
+                               lr = control_list$psi$lr %||%  (5/nr_time), 
                                len = nr_regions, 
                                beta1 = control_list$psi$beta1 %||%  beta1_mom, 
                                beta2 = control_list$psi$beta2 %||%  beta2_mom , 
@@ -350,8 +356,9 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
                                momentum = control_list$psi$momentum %||%  momentum )
   
   
+
   controls$beta_phi <- get_controls(optimizer_beta_phi,  
-                                    lr = control_list$beta_phi$lr %||%  5/nrow(X), 
+                                    lr = control_list$beta_phi$lr %||%  (5/nrow(X)), 
                                     len = 1, 
                                     beta1 = control_list$beta_phi$beta1 %||%  beta1_mom, 
                                     beta2 = control_list$beta_phi$beta2 %||%  beta2_mom , 
@@ -360,7 +367,7 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
                                     momentum = control_list$beta_phi$momentum %||%  momentum )
   
   controls$a <- get_controls(optimizer_a,  
-                             lr = control_list$a$lr %||%  0.5/nr_time, 
+                             lr = control_list$a$lr %||%  (0.5/nr_time), 
                              len = nr_edges, 
                              beta1 = control_list$a$beta1 %||%  beta1_mom, 
                              beta2 = control_list$a$beta2 %||%  beta2_mom , 
@@ -370,15 +377,15 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   
   
   controls$pi <- get_controls(optimizer_pi, 
-                              lr = control_list$pi$lr %||% 0.1/nrow(X), 
+                              lr = control_list$pi$lr %||% ( 0.01/nrow(X)), 
                               len = 1, 
                               beta1 = control_list$pi$beta1 %||%  beta1_mom,
                               beta2 = control_list$pi$beta2 %||%  beta2_mom, 
                               epsilon = epsilon, 
                               iter = 1, 
                               momentum = control_list$pi$momentum %||%  momentum)
-  
-  
+
+
   # Start the loop
   beta_nrom <- c()
   a_norm <- c()
@@ -389,7 +396,10 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
   # (Assuming get_spatial_aggregate() and get_mu() are defined in utils.R)
   cat("\nStarting EM updates:\n")
   
+  iteration_times <- c()
   for (iter in 1:n_iter) {
+    
+    a1 <- Sys.time()
     
     # 0. Prepare updates
     # Store old parameters and update
@@ -519,6 +529,8 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
         spatial_converged <- isTRUE(all.equal(psi_est, psi_old, tolerance = param_tol))
       }
       
+      beta_phi_converged <- isTRUE(all.equal(beta_phi_est, beta_phi_old, tolerance = param_tol))
+      
     }else{
       # 1. E-steps
       # Compute expected derivative with respect to mu
@@ -598,10 +610,13 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
       beta_phi_est <- beta_phi_out$param
       controls$beta_phi <- beta_phi_out$controls
       
+      
+      beta_phi_converged <- isTRUE(all.equal(beta_phi_est, beta_phi_old, tolerance = param_tol))
+      
     }
     
     # 3. Check Convergence
-    if(beta_converged & spatial_converged  ){
+    if(beta_converged & spatial_converged & beta_phi_converged  ){
       print("Breaking because parameters have stopped changing")
       break
     }
@@ -618,15 +633,13 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
 
     if(iter >1){
       log_lik_old <- log_lik
-
       log_lik <- sum(log(zzip_log_lik_function(claims,  exp(beta_phi_est), pi_est,  mu,  z_density))) 
       if(model_type == "learn_graph"){
         log_lik <- log_lik - lambda*sum(a_est)
       }
-      print(log_lik)
       
       if(iter > 2){
-        if(isTRUE(all.equal(log_lik, log_lik_old, tolerance = Q_tol))){
+        if(isTRUE(all.equal(log_lik, log_lik_old, tolerance = Q_tol))  ){
           
           print("Breaking because log-likelihood has stopped changing")
           break
@@ -664,30 +677,10 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
     
     
     
-    
+    iteration_times[iter] <-  Sys.time() - a1 
   }
   
-  if(verbose >= 1){
-    print(paste0("log-likelihood value  ",sum(log_lik)))
-  }
-  
-  if(verbose >=2){
-    if(model_type == "learn_graph"){
-      cat(sprintf("Iteration %d: beta = [%s], a = [%s], beta_phi = %f, pi = %f \n,",
-                  iter,
-                  paste(round(beta_est, 4), collapse = ", "),
-                  paste(round(a_est, 4), collapse = ", "),
-                  beta_phi_est,
-                  pi_est))
-    }else if (model_type == "learn_psi"){
-      cat(sprintf("Iteration %d: beta = [%s], psi = [%s], beta_phi = %f, pi = %f \n,",
-                  iter,
-                  paste(round(beta_est, 4), collapse = ", "),
-                  paste(round(psi_est, 4), collapse = ", "),
-                  beta_phi_est,
-                  pi_est))
-    } 
-  }
+
   
   
   
@@ -861,8 +854,19 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
     var_loglik <- NA
   }
   
+  # Find number of params
+  if(a_known){
+    nr_param <- length(beta_est) + 1
+  }else if(model_type == "learn_graph"){
+    nr_param <- length(beta_est) + 1 + sum(abs(a_est) > 1e-3)
+  }else if(model_type == "learn_psi"){
+    nr_param <- length(beta_est) + 1 + length(psi_est)
+  }
   
-  return(list(beta1 = beta_est, pi = pi_est, a = a_est, psi = psi_est, beta2 = beta_phi_est, mu = mu, Hessian = Hessian, log_lik = log_lik, var_loglik = var_loglik ))
+  
+  
+  return(list(beta1 = beta_est, pi = pi_est, a = a_est, psi = psi_est, beta2 = beta_phi_est, mu = mu, Hessian = Hessian, 
+              log_lik = log_lik, var_loglik = var_loglik, nr_param = nr_param, time_to_init = time_to_init, iteration_times = iteration_times ))
   
 }
 
@@ -870,10 +874,11 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
 #########################
 # 4. Test
 #########################
-# n <- 50
-# t <- 10
-# data_sim <- simulate_claims(n, t, "graph", FALSE, mixing = "ig", model_type = "zip",  exposure_lambda = 0, area = 10, seed = 1)
-# 
+# n <- 500
+# t <- 2
+# data_sim <- simulate_claims(n, t, "psi", TRUE, mixing = "gamma", model_type = "zip",
+#                             exposure_lambda = 0, area = 20, seed = 2, order_regions = TRUE, density = 0.2)
+#
 # # Extract variables from simulation
 # claims <- data_sim$claims
 # X <- data_sim$X
@@ -882,19 +887,18 @@ zip_mixed <- function(claims, X, years, locs, agg_claims, A, exposure, model_typ
 # agg_claims <- data_sim$agg_claims
 # A <- data_sim$A
 # exposure <- data_sim$exposure
-# model_type <- "learn_graph"
-# additive <- FALSE
-# mixing <- "ig"
-# 
-# 
-# # out_zip <- zip(claims, X, locs, years,  agg_claims,
-# #                A, additive, model_type, lambda = 0, exposure = exposure, max_itr = 300)
-# 
+# model_type <- "learn_psi"
+# additive <- TRUE
+# mixing <- "gamma"
+
+#
+# out_zip <- zip(claims, X, locs, years,  agg_claims,
+#                A, additive, model_type, lambda = 0, exposure = exposure, max_itr = 1, calc_hessian = FALSE)
+# #
 # out <- zip_mixed (claims, X, years, locs, agg_claims, A, exposure, model_type, additive, mixing,  Emethod = "integration",
 #               n_iter = 10, lambda = 0, optimizer_beta = "gd", optimizer_psi = "gd",
 #               optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd", sgd = FALSE,
-#               batch_size = 100, verbose = 2, do_optim = FALSE, calc_se = FALSE)
-
+#               batch_size = 100, verbose = 2, do_optim = FALSE, calc_se = FALSE, max_itr_poisson = 1)
 # sum(abs(out_zip$beta1 - data_sim$beta1))
 # sum(abs(out$beta1 - data_sim$beta1))
 
