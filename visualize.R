@@ -49,27 +49,9 @@ Poisson_t$beta2_plot + ylim(c(0, 0.15)) + theme_minimal(base_size = 35) +labs(ti
 
 Poisson_t$edge_plot
 
-Poisson_lambda <- plot_per_lambda("Poisson_ln", 1:9, 0.4)
-Poisson_lambda$f1_plot+ theme_minimal(base_size = 35) +labs(title = latex2exp::TeX("$\\f_1$ score over $\\lambda$ by model, time, and time points"),
-                                                            y = latex2exp::TeX("$$\\f_1$ score")) + 
-  theme(
-    legend.position     = c(0.25, 0.75),    # inside panel, 2% from left & bottom
-    legend.justification = c(0, 0),         # anchor legend’s bottom‐left corner
-    legend.background    = element_rect(fill = alpha("white", 0.5))
-  )
 
 
-Poisson_lambda$side_by_side+ theme_minimal(base_size = 38) +labs(x = "", y="")
 
-
-Poisson_lambda <- plot_per_lambda("Poisson", 1:9, 0.8)
-Poisson_lambda$f1_plot+ theme_minimal(base_size = 35) +labs(title = latex2exp::TeX("$\\f_1$ score over $\\lambda$ by model, time, and time points"),
-                                                            y = latex2exp::TeX("$$\\f_1$ score")) + 
-  theme(
-    legend.position     = c(0.25, 0.75),    # inside panel, 2% from left & bottom
-    legend.justification = c(0, 0),         # anchor legend’s bottom‐left corner
-    legend.background    = element_rect(fill = alpha("white", 0.5))
-  )
 
 
 # Poisson_lambda$side_by_side+ theme_minimal(base_size = 38) +labs(x = "", y="")
@@ -375,33 +357,6 @@ zip_t$beta2_plot  + theme_minimal(base_size = 35) +labs(title = latex2exp::TeX("
 
 
 
-# ZIP PSI ERROR -------
-
-
-tmp <- new.env()
-loaded_objs <- load(paste0("sim_data/", "zip_psi", "_ln_per_t", 0.4, "id", 1, ".RData") , envir = tmp)
-my_list <- mget(loaded_objs, envir = tmp)
-
-zip_psi_error <- plot_error(my_list, 1, 2,is_ordinary = FALSE)
-zip_psi_error$beta_plot
-zip_psi_error$a_plot+   scale_color_brewer("Parameter", palette = "Set2",
-                     labels = c(latex2exp::TeX("$\\phi_{1}$"), latex2exp::TeX("$\\phi_{2}$"))) +
-  scale_fill_brewer("Parameter", palette = "Set2",
-                    labels = c(latex2exp::TeX("$\\phi_{1}$"), latex2exp::TeX("$\\phi_{2}$"))) +
-  labs(
-    x     = expression(log(t)),
-    y     = "Estimate ± 2 SE",
-    title = latex2exp::TeX("$\\phi_{1}$ and  $\\phi_{2}$ over time")
-  ) +
-  theme_minimal(base_size = 36) +
-  theme(
-    plot.title      = element_text(hjust = 0.5),
-    legend.position = c(0.8, 0.6),
-    legend.background = element_rect(fill = "white")
-  )
-
-
-
 ######### Speed --------------
 
 library(tidyverse)
@@ -560,42 +515,6 @@ time_mp_driect <- bind_rows(time_mp_driect)
 betas2_mp_driect <- bind_rows(betas2_mp_driect)
 
 
-
-# # log likelihood
-# 
-# additive <- TRUE
-# sim <- simulate_claims(50, 5000, spatial_type = "graph",additive =  additive, area = nr_regions, 
-#                        model_type = "zip", mixing = "ig", density = 0.4,  seed = 2)
-# print(t)
-# # subset claims
-# t <- 1000
-# claims <- sim$claims[sim$years <= t]
-# locs <- sim$locs[sim$years <= t]
-# agg_claims <- sim$agg_claims[, 1:t]
-# X <- sim$X[sim$years <= t, ]
-# years <- sim$years[sim$years <= t]
-# exposure <- sim$exposure[sim$years <= t]
-# 
-# 
-# tmp <- new.env()
-# loaded_objs <- load(paste0("sim_data/", "zip", "_ln_per_t",  0.4, "id", 2, ".RData") , envir = tmp)
-# my_list <- mget(loaded_objs, envir = tmp)
-# 
-# 
-# # Compute spatial aggregate effects and baseline nu
-# se <- get_spatial_aggregate(locs, get_W_from_array(my_list$A_est_ig[["1000"]], 10), NA, agg_claims, years, "learn_graph")
-# nu <- as.numeric(exp(X %*% my_list$beta_est_ig[["1000"]]))  # baseline mu from covariates
-# 
-# # Get full mu by combining covariate effects (nu), spatial effects, and exposure
-# mu <- get_mu(nu, se$spatial_effect, exposure, additive)
-# 
-# phi <- exp(my_list$beta2_est_ig[["1000"]])
-# prop <- out_ig$prop
-# 
-# 
-# sum(log_zinb(claims, mu, phi, prop)) 
-
-
 # error 
 
 beta_true_matrix_mp <- matrix(beta_true,
@@ -665,7 +584,7 @@ ggplot(betas_all, aes(x = factor(t), y = X11, fill = model)) +
     legend.background    = element_rect(fill = alpha("white", 0.5))
   )
 
-# dodged box‐plot
+ # dodged box‐plot
 ggplot(betas_all, aes(x = factor(t), y = error, fill = model)) +
   geom_boxplot(position = position_dodge(width = 0.8), outlier.shape = NA) +
   stat_boxplot(geom = "errorbar", 
@@ -755,7 +674,7 @@ ggplot(as_all, aes(x = factor(t), y = log(error), fill = model)) +
 
 
 df1 <- time_mp %>% mutate(model = "Mixed Poisson")
-df2 <- time_p %>% mutate(model = "Poisson")
+df2 <- time_mp_driect %>% mutate(model = "Poisson")
 times_df <- bind_rows(df1, df2)
 
 ret$times <- ggplot(times_df, aes(x = as.factor(t), y = log(time), fill = model)) +

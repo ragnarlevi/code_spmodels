@@ -224,6 +224,6 @@ cat("Hurdle mixed model beta2 error:", sum(abs(out_hurdle_mixed$beta2 - hurdle_s
 
 
 
-The experiments in the paper were run by running `poisson_test.R`, `zip_test.R`,  `hurdle_test.R`, `speed_test.R` and `test_direct_vs_em.R`, but they do take quite some time to run.
+The experiments in the paper were run by running `poisson_test.R`, `zip_test.R`,  `hurdle_test.R`, `speed_test.R` and `test_direct_vs_em.R`, but they do take quite some time to run. To generate the plots, run `visualize.R` which reads the data from the simulation experiments from the folder `data_sim`.
 
 
