@@ -1,7 +1,6 @@
 ReadMe
 ================
 
-# code_spmodels
 
 The code requires the package [tidyverse](https://www.tidyverse.org/) to
 be installed: `install.packages("tidyverse")`.
