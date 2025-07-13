@@ -9,6 +9,15 @@ be installed: `install.packages("tidyverse")`.
 To run the case study on a generate toy data set, please run
 `toy_data_analysis.R`.
 
+The experiments in the paper were run by running `poisson_test.R`,
+`zip_test.R`, `hurdle_test.R`, `speed_test.R` and `test_direct_vs_em.R`,
+but they do take quite some time to run. To generate the plots, run
+`visualize.R` which reads the data from the simulation experiments from
+the folder `data_sim`.
+
+Example code can be seen below.
+
+
 ## Run the models
 
 ``` r
@@ -343,8 +352,4 @@ cat("Hurdle mixed model beta2 error:", sum(abs(out_hurdle_mixed$beta2 - hurdle_s
 
     ## Hurdle mixed model beta2 error: 0.04425221
 
-The experiments in the paper were run by running `poisson_test.R`,
-`zip_test.R`, `hurdle_test.R`, `speed_test.R` and `test_direct_vs_em.R`,
-but they do take quite some time to run. To generate the plots, run
-`visualize.R` which reads the data from the simulation experiments from
-the folder `data_sim`.
+
