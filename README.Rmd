@@ -102,18 +102,16 @@ out_zip_mixed <- zip_mixed (claims = zip_sim$claims, X = zip_sim$X, years = zip_
 # Louis method error
 sqrt(diag(solve(out_zip_mixed$Hessian-out_zip_mixed$var_loglik)))[1:5]
 
+
 # Beta error
-cat("\n# Beta Error\n")
 cat("Poisson model beta1 error:", sum(abs(out_zip$beta1 - zip_sim$beta1)), "\n")
 cat("Poisson mixed model beta1 error:", sum(abs(out_zip_mixed$beta1 - zip_sim$beta1)), "\n")
 
 # Alpha error
-cat("\n# Alpha Error\n")
 cat("Poisson model a error:", sum(abs(out_zip$a - zip_sim$a)), "\n")
 cat("Poisson mixed model a error:", sum(abs(out_zip_mixed$a - zip_sim$a)), "\n")
 
 # Beta_phi error
-cat("\n# Beta_phi Error\n")
 cat("Poisson mixed model beta2 error:", sum(abs(out_zip_mixed$beta2 - zip_sim$beta2)), "\n")
 
 
@@ -156,17 +154,14 @@ out_zip_psi_mixed <- zip_mixed (claims = zip_sim_psi$claims, X = zip_sim_psi$X, 
 sqrt(diag(solve(out_zip_psi_mixed$Hessian-out_zip_psi_mixed$var_loglik)))
 
 # Beta error
-cat("\n# Beta Error\n")
 cat("ZIP psi model beta1 error:", sum(abs(out_zip_psi$beta1 - zip_sim_psi$beta1)), "\n")
 cat("ZIP psi mixed model beta1 error:", sum(abs(out_zip_psi_mixed$beta1 - zip_sim_psi$beta1)), "\n")
 
 # Alpha error
-cat("\n# Alpha Error\n")
 cat("ZIP psi model a error:", sum(abs(out_zip_psi$psi - zip_sim_psi$psi)), "\n")
 cat("ZIP psi mixed model a error:", sum(abs(out_zip_psi_mixed$psi - zip_sim_psi$psi)), "\n")
 
 # Beta_phi error
-cat("\n# Beta_phi Error\n")
 cat("ZIP psi mixed model beta2 error:", sum(abs(out_zip_psi_mixed$beta2 - zip_sim_psi$beta2)), "\n")
 
 
@@ -192,7 +187,7 @@ out_hurdle_mixed <- hurdle_mixed (claims = hurdle_sim$claims, X = hurdle_sim$X, 
                             optimizer_a = "gd", optimizer_pi = "gd", optimizer_beta_phi = "gd",  # use gradient descent for each parameter
                             sgd = FALSE,  # can allow stochastic gradient but EM not guaranteed to take the correct step
                             batch_size = 100, 
-                            verbose = 2, 
+                            verbose = 0, 
                             do_optim = FALSE,   # generally slower
                             calc_se = TRUE,
                             beta2_start = 0.2,   # takes some time
@@ -206,17 +201,14 @@ out_hurdle_mixed <- hurdle_mixed (claims = hurdle_sim$claims, X = hurdle_sim$X, 
 sqrt(diag(solve(out_hurdle_mixed$Hessian-out_hurdle_mixed$var_loglik)))
 
 # Beta error
-cat("\n# Beta Error\n")
 cat("Hurdle model beta1 error:", sum(abs(out_hurdle$beta1 - hurdle_sim$beta1)), "\n")
 cat("Hurdle mixed model beta1 error:", sum(abs(out_hurdle_mixed$beta1 - hurdle_sim$beta1)), "\n")
 
 # Alpha error
-cat("\n# Alpha Error\n")
 cat("Hurdle model a error:", sum(abs(out_hurdle$a - hurdle_sim$a)), "\n")
 cat("Hurdle mixed model a error:", sum(abs(out_hurdle_mixed$a - hurdle_sim$a)), "\n")
 
 # Beta_phi error
-cat("\n# Beta_phi Error\n")
 cat("Hurdle mixed model beta2 error:", sum(abs(out_hurdle_mixed$beta2 - hurdle_sim$beta2)), "\n")
 
 
