@@ -110,6 +110,13 @@ do_zip_t <- function(density, id, calc_se){
   }
 
 
+# lapply(A_est_ig, function(x)sum(abs(x - sim$a)))
+# lapply(A_est_p, function(x)sum(abs(x - sim$a)))
+# 
+# lapply(beta_est_ig, function(x)sum(abs(x - sim$beta1)))
+# lapply(beta_est_p, function(x)sum(abs(x - sim$beta1)))
+
+
 for(id in 1:10){
   print(id)
   if(id == 1){

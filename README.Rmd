@@ -1,6 +1,6 @@
 ---
 title: "ReadMe"
-output: html_document
+output: github_document
 ---
 
 
@@ -8,6 +8,7 @@ output: html_document
 
 The code requires the package [tidyverse](https://www.tidyverse.org/) to be installed: `install.packages("tidyverse")`.
 
+To run the case study on a generate toy data set, please run `toy_data_analysis.R`.
 
 
 ## Run the models
