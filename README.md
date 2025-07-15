@@ -5,7 +5,9 @@ ReadMe
 The code requires the package [tidyverse](https://www.tidyverse.org/) to
 be installed: `install.packages("tidyverse")`.
 
-To run the case study on a generate toy data set, please run
+Before running any code set the working directory (with `setwd(path)`) to the folder containing the code and data.
+
+To run the case study on a generated toy data set, please run
 `toy_data_analysis.R`.
 
 The experiments in the paper were run by running `poisson_test.R`,
