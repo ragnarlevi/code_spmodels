@@ -139,9 +139,7 @@ out_zip_mixed <- zip_mixed (claims = zip_sim$claims, X = zip_sim$X, years = zip_
                             )
 ```
 
-    ## 
-    ## Starting EM updates:
-    ## [1] "Breaking because log-likelihood has stopped changing"
+    
 
 ``` r
 # Louis method error
@@ -224,8 +222,6 @@ out_zip_psi_mixed <- zip_mixed (claims = zip_sim_psi$claims, X = zip_sim_psi$X, 
                             )
 ```
 
-    ## 
-    ## Starting EM updates:
 
 ``` r
 # Louis method error
@@ -317,15 +313,10 @@ cat("Hurdle mixed model beta1 error:", sum(abs(out_hurdle_mixed$beta1 - hurdle_s
 
     ## Hurdle mixed model beta1 error: 0.8678489
 
+
+
 ``` r
 # Alpha error
-cat("\n# Alpha Error\n")
-```
-
-    ## 
-    ## # Alpha Error
-
-``` r
 cat("Hurdle model a error:", sum(abs(out_hurdle$a - hurdle_sim$a)), "\n")
 ```
 
@@ -337,15 +328,10 @@ cat("Hurdle mixed model a error:", sum(abs(out_hurdle_mixed$a - hurdle_sim$a)), 
 
     ## Hurdle mixed model a error: 8.036557
 
+
+
 ``` r
 # Beta_phi error
-cat("\n# Beta_phi Error\n")
-```
-
-    ## 
-    ## # Beta_phi Error
-
-``` r
 cat("Hurdle mixed model beta2 error:", sum(abs(out_hurdle_mixed$beta2 - hurdle_sim$beta2)), "\n")
 ```
 
